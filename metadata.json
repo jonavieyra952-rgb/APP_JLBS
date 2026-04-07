@@ -1,0 +1,8 @@
+{
+  "name": "JLBS Seguridad",
+  "description": "Sistema de gestión de seguridad y servicios de campo para JLBS SERVICIOS SA DE CV.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}

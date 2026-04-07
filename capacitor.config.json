@@ -1,0 +1,10 @@
+{
+  "appId": "com.jlbs.seguridad",
+  "appName": "JLBS Seguridad",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": ["*"],
+    "cleartext": true
+  }
+}
