@@ -19,6 +19,7 @@ import SupervisorReportSimple from "./components/SupervisorReportSimple";
 import SupervisorHistorySimple from "./components/SupervisorHistorySimple";
 import SupervisorGuardHistorySimple from "./components/SupervisorGuardHistorySimple";
 import UnitInspectionSimple from "./components/UnitInspectionSimple";
+import GuardHistorySimple from "./components/GuardHistorySimple";
 import logoJLBS from "./assets/logo-jlbs.jpeg";
 
 type Shift = "Matutino" | "Nocturno";
@@ -79,11 +80,13 @@ type SupervisorGuardPunchItem = {
 type GuardHistoryItem = {
   id: number | string;
   tipo: "IN" | "OUT";
-  turno: Shift;
-  lugar_trabajo: string;
-  jornada: string;
+  turno?: string;
+  servicio: string;
   fecha: string;
   hora: string;
+  foto_url?: string | null;
+  lat?: number | null;
+  lng?: number | null;
 };
 
 const isAdminWebRoute =
@@ -145,7 +148,7 @@ export default function App() {
   const [guardName, setGuardName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [shift, setShift] = useState<Shift | null>(null);
+  const [shift, setShift] = useState<Shift>("Matutino");
 
   const [isRegistering, setIsRegistering] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -172,7 +175,9 @@ export default function App() {
 
   const [supervisorItems, setSupervisorItems] = useState<SupervisorHistoryItem[]>([]);
   const [supervisorSummaryLoading, setSupervisorSummaryLoading] = useState(false);
-  const [supervisorGuardPunches, setSupervisorGuardPunches] = useState<SupervisorGuardPunchItem[]>([]);
+  const [supervisorGuardPunches, setSupervisorGuardPunches] = useState<SupervisorGuardPunchItem[]>(
+    []
+  );
   const [supervisorGuardPunchesLoading, setSupervisorGuardPunchesLoading] = useState(false);
   const [dashboardNow, setDashboardNow] = useState(new Date());
   const [supervisorHistoryFilter, setSupervisorHistoryFilter] = useState<"all" | "today">("all");
@@ -302,16 +307,20 @@ export default function App() {
     return {
       id: item?.id ?? `${rawTipo}-${item?.fecha || item?.hora || index}`,
       tipo: rawTipo === "OUT" ? "OUT" : "IN",
-      turno: (item?.turno || shift || "Matutino") as Shift,
-      lugar_trabajo:
+      turno: String(item?.turno || shift || "Matutino").trim() || "Sin turno",
+      servicio:
         item?.lugar_trabajo ||
         item?.servicio_nombre ||
         item?.servicio ||
         item?.lugar ||
         "Servicio no disponible",
-      jornada: item?.jornada || "Sin jornada",
       fecha: item?.fecha || item?.created_at || item?.hora || new Date().toISOString(),
       hora: item?.hora || item?.fecha || item?.created_at || new Date().toISOString(),
+      foto_url: item?.foto_url || null,
+      lat:
+        item?.lat === null || typeof item?.lat === "undefined" ? null : Number(item.lat),
+      lng:
+        item?.lng === null || typeof item?.lng === "undefined" ? null : Number(item.lng),
     };
   };
 
@@ -364,7 +373,11 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (isLoggedIn && userRole === "guard" && (screen === "dashboard" || screen === "guard-history")) {
+    if (
+      isLoggedIn &&
+      userRole === "guard" &&
+      (screen === "dashboard" || screen === "guard-history")
+    ) {
       fetchGuardHistory();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -573,7 +586,7 @@ export default function App() {
             nombre: guardName,
             email,
             password,
-            turno: shift,
+            turno: "Matutino",
             role: "guard",
             id: Date.now(),
           });
@@ -582,7 +595,8 @@ export default function App() {
         } else {
           const locals = getLocalUsers();
           const user = locals.find(
-            (u: any) => (u.nombre === guardName || u.email === guardName) && u.password === password
+            (u: any) =>
+              (u.nombre === guardName || u.email === guardName) && u.password === password
           );
 
           if (user) {
@@ -610,7 +624,6 @@ export default function App() {
             nombre: guardName,
             email,
             password,
-            turno: shift,
           }),
         });
 
@@ -658,7 +671,9 @@ export default function App() {
     } catch (err: any) {
       console.error(err);
       setIsDemoMode(true);
-      setError(err?.message || "Error de conexión. Se activó MODO DEMO para que puedas probar la interfaz.");
+      setError(
+        err?.message || "Error de conexión. Se activó MODO DEMO para que puedas probar la interfaz."
+      );
     } finally {
       setIsLoading(false);
     }
@@ -690,7 +705,7 @@ export default function App() {
 
       setGuardName(verifyEmail);
       setPassword("");
-      setShift(null);
+      setShift("Matutino");
     } catch (err: any) {
       console.error(err);
       setError(err?.message || "Error al verificar el código.");
@@ -731,7 +746,7 @@ export default function App() {
     setGuardName("");
     setEmail("");
     setPassword("");
-    setShift(null);
+    setShift("Matutino");
     setUserRole("");
     setSupervisorItems([]);
     setSupervisorGuardPunches([]);
@@ -807,7 +822,9 @@ export default function App() {
                 <Shield className="w-8 h-8" />
               </div>
               <h1 className="text-3xl font-bold text-slate-900">Panel Admin Web</h1>
-              <p className="text-slate-500 mt-2">Inicia sesión con una cuenta de administrador.</p>
+              <p className="text-slate-500 mt-2">
+                Inicia sesión con una cuenta de administrador.
+              </p>
             </div>
 
             {adminError && (
@@ -881,7 +898,8 @@ export default function App() {
             <div>
               <h1 className="text-3xl font-bold text-slate-900">Panel de Administración</h1>
               <p className="text-slate-500">
-                Bienvenido, {adminProfile.nombre}. Gestiona guardias, supervisores y administradores.
+                Bienvenido, {adminProfile.nombre}. Gestiona guardias, supervisores y
+                administradores.
               </p>
             </div>
 
@@ -931,7 +949,9 @@ export default function App() {
                 </div>
                 <div>
                   <h2 className="text-xl font-bold text-slate-900">Crear usuario</h2>
-                  <p className="text-sm text-slate-500">Crea guardias, supervisores o administradores.</p>
+                  <p className="text-sm text-slate-500">
+                    Crea guardias, supervisores o administradores.
+                  </p>
                 </div>
               </div>
 
@@ -1070,7 +1090,10 @@ export default function App() {
                   <tbody className="divide-y divide-slate-50">
                     {adminUsers.length > 0 ? (
                       adminUsers.map((u) => (
-                        <tr key={u.id} className="text-sm text-slate-600 hover:bg-slate-50/50 transition-colors">
+                        <tr
+                          key={u.id}
+                          className="text-sm text-slate-600 hover:bg-slate-50/50 transition-colors"
+                        >
                           <td className="p-4 font-mono text-xs">{u.id}</td>
                           <td className="p-4 font-bold text-slate-900">{u.nombre}</td>
                           <td className="p-4">{u.email}</td>
@@ -1217,7 +1240,9 @@ export default function App() {
           <div className="space-y-4">
             <h1 className="text-3xl font-bold tracking-tight text-white">
               JLBS SERVICIOS <br />
-              <span className="text-white font-medium text-xl uppercase tracking-widest">SA DE CV</span>
+              <span className="text-white font-medium text-xl uppercase tracking-widest">
+                SA DE CV
+              </span>
             </h1>
             <p className="text-slate-300 text-sm max-w-[240px] mx-auto leading-relaxed font-medium">
               Plataforma de gestión de seguridad y servicios de campo.
@@ -1252,7 +1277,11 @@ export default function App() {
           <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-[3px]" />
         </div>
 
-        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="mt-8 space-y-6 z-10">
+        <motion.div
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="mt-8 space-y-6 z-10"
+        >
           <div className="space-y-4">
             {isDemoMode && (
               <div className="bg-amber-500/20 text-amber-400 p-2 rounded-lg text-[10px] font-bold text-center uppercase tracking-widest border border-amber-500/30">
@@ -1260,10 +1289,14 @@ export default function App() {
               </div>
             )}
 
-            <h2 className="text-4xl font-bold text-white tracking-tight">{isRegistering ? "Registro" : "Acceso"}</h2>
+            <h2 className="text-4xl font-bold text-white tracking-tight">
+              {isRegistering ? "Registro" : "Acceso"}
+            </h2>
 
             <p className="text-[#0dcaf2] font-medium tracking-wide">
-              {isRegistering ? "Crea tu cuenta para empezar." : "Identifícate para iniciar tu turno."}
+              {isRegistering
+                ? "Crea tu cuenta para empezar."
+                : "Identifícate para iniciar tu turno."}
             </p>
 
             {error && (
@@ -1272,7 +1305,9 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 className={cn(
                   "p-3 rounded-xl text-xs font-bold text-center",
-                  error.includes("exitoso") || error.includes("verificada") || error.includes("reenviado")
+                  error.includes("exitoso") ||
+                    error.includes("verificada") ||
+                    error.includes("reenviado")
                     ? "bg-emerald-500/20 text-emerald-400"
                     : "bg-red-500/20 text-red-400"
                 )}
@@ -1280,10 +1315,6 @@ export default function App() {
                 {error}
               </motion.div>
             )}
-
-            <div className="text-[10px] text-white/40">
-              API: <span className="text-white/60">{API_URL}</span>
-            </div>
           </div>
 
           <div className="space-y-4">
@@ -1316,7 +1347,9 @@ export default function App() {
             )}
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-white/40 uppercase tracking-[0.2em] ml-1">Contraseña</label>
+              <label className="text-[10px] font-bold text-white/40 uppercase tracking-[0.2em] ml-1">
+                Contraseña
+              </label>
               <input
                 type="password"
                 value={password}
@@ -1325,36 +1358,15 @@ export default function App() {
                 className="w-full bg-white/10 border border-white/10 rounded-2xl p-4 text-lg text-white shadow-xl backdrop-blur-md focus:ring-2 focus:ring-[#0dcaf2] transition-all outline-none placeholder:text-white/20"
               />
             </div>
-
-            <div className="space-y-2">
-              <label className="text-[10px] font-bold text-white/40 uppercase tracking-[0.2em] ml-1">Turno</label>
-              <div className="grid grid-cols-2 gap-3">
-                {(["Matutino", "Nocturno"] as const).map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setShift(t)}
-                    className={cn(
-                      "py-3 rounded-2xl font-bold transition-all border-2 backdrop-blur-md",
-                      shift === t
-                        ? "bg-white border-white text-slate-900 shadow-xl"
-                        : "bg-white/5 border-white/10 text-white/60 hover:border-white/30"
-                    )}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
 
           <motion.button
             whileTap={{ scale: 0.98 }}
-            disabled={isLoading || !guardName || !shift || !password || (isRegistering && !email)}
+            disabled={isLoading || !guardName || !password || (isRegistering && !email)}
             onClick={handleAuth}
             className={cn(
               "w-full py-5 rounded-2xl font-bold text-lg shadow-2xl transition-all flex items-center justify-center gap-2 mt-2",
-              !isLoading && guardName && shift && password && (!isRegistering || email)
+              !isLoading && guardName && password && (!isRegistering || email)
                 ? "bg-[#0dcaf2] text-white shadow-[#0dcaf2]/20"
                 : "bg-white/10 text-white/20 cursor-not-allowed shadow-none"
             )}
@@ -1408,10 +1420,16 @@ export default function App() {
           <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-[3px]" />
         </div>
 
-        <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="mt-8 space-y-6 z-10">
+        <motion.div
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="mt-8 space-y-6 z-10"
+        >
           <div className="space-y-3">
             <h2 className="text-3xl font-bold text-white tracking-tight">Verificar cuenta</h2>
-            <p className="text-[#0dcaf2] font-medium tracking-wide text-sm">Te enviamos un código de 6 dígitos a tu correo.</p>
+            <p className="text-[#0dcaf2] font-medium tracking-wide text-sm">
+              Te enviamos un código de 6 dígitos a tu correo.
+            </p>
 
             {error && (
               <motion.div
@@ -1510,112 +1528,21 @@ export default function App() {
 
   if (isLoggedIn && screen === "guard-history") {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col p-6 font-sans max-w-md mx-auto">
-        <div className="flex items-start justify-between mb-8 gap-4">
-          <div>
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.22em]">Consulta</div>
-            <h1 className="text-4xl font-extrabold text-slate-900 mt-2">Historial</h1>
-            <p className="text-slate-500 mt-2">Últimos 3 registros de entrada y salida.</p>
-          </div>
-          <button
-            onClick={() => {
-              setScreen("dashboard");
-              fetchGuardHistory();
-            }}
-            className="bg-slate-900 text-white px-6 py-4 rounded-[1.4rem] font-bold text-lg shadow-sm"
-          >
-            Volver
-          </button>
-        </div>
-
-        <div className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 mb-5 flex items-center justify-between gap-4">
-          <div>
-            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Vista segura</div>
-            <div className="text-xl font-extrabold text-slate-900 mt-2">Solo lectura</div>
-            <div className="text-sm text-slate-500 mt-1">Aquí solo se muestran los movimientos recientes del guardia.</div>
-          </div>
-          <button
-            onClick={fetchGuardHistory}
-            className="px-5 py-4 rounded-[1.4rem] bg-cyan-50 text-[#0dcaf2] border border-cyan-100 font-extrabold text-lg"
-          >
-            ACTUALIZAR
-          </button>
-        </div>
-
-        <div className="space-y-4 pb-6">
-          {guardHistoryLoading ? (
-            <div className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 text-slate-500 font-medium">
-              Cargando historial...
-            </div>
-          ) : guardHistoryError ? (
-            <div className="bg-red-50 border border-red-100 text-red-700 rounded-[2rem] p-5 text-sm font-semibold">
-              {guardHistoryError}
-            </div>
-          ) : guardHistoryItems.length > 0 ? (
-            guardHistoryItems.map((item) => {
-              const dt = formatDateTime(item.hora || item.fecha);
-              const isOut = item.tipo === "OUT";
-
-              return (
-                <div key={String(item.id)} className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100">
-                  <div className="flex items-start gap-4">
-                    <div
-                      className={cn(
-                        "w-[92px] h-[92px] rounded-[1.5rem] flex items-center justify-center text-2xl font-extrabold shrink-0",
-                        isOut ? "bg-slate-100 text-slate-700" : "bg-cyan-50 text-[#0dcaf2]"
-                      )}
-                    >
-                      {isOut ? "OUT" : "IN"}
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                        {isOut ? "Salida" : "Entrada"}
-                      </div>
-                      <div className="text-2xl font-extrabold text-slate-900 mt-2">
-                        {isOut ? "Registro de salida" : "Registro de entrada"}
-                      </div>
-                      <div className="text-slate-500 mt-4 text-xl">{dt.date}</div>
-                      <div className="text-4xl font-extrabold text-slate-900 mt-1">{dt.time}</div>
-
-                      <div className="flex flex-wrap gap-3 mt-5">
-                        <span className="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-[11px] font-bold uppercase tracking-widest text-slate-500">
-                          {item.turno}
-                        </span>
-                        <span className="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-[11px] font-bold uppercase tracking-widest text-slate-500">
-                          {item.lugar_trabajo}
-                        </span>
-                        <span className="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-[11px] font-bold uppercase tracking-widest text-slate-500">
-                          {item.jornada}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          ) : (
-            <div className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Sin registros</div>
-              <div className="text-xl font-extrabold text-slate-900 mt-2">Aún no hay movimientos disponibles</div>
-              <div className="text-sm text-slate-500 mt-2">
-                Cuando registres entradas o salidas en control horario, aquí verás los últimos 3 movimientos.
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      <GuardHistorySimple
+        items={guardHistoryItems}
+        loading={guardHistoryLoading}
+        error={guardHistoryError}
+        onRefresh={fetchGuardHistory}
+        onBack={() => {
+          setScreen("dashboard");
+          fetchGuardHistory();
+        }}
+      />
     );
   }
 
   if (isLoggedIn && screen === "unit-inspection") {
-    return (
-      <UnitInspectionSimple
-        apiBase={API_URL}
-        token={authToken}
-        onBack={() => setScreen("dashboard")}
-      />
-    );
+    return <UnitInspectionSimple apiBase={API_URL} token={authToken} onBack={() => setScreen("dashboard")} />;
   }
 
   if (isLoggedIn && screen === "supervisor") {
@@ -1682,7 +1609,9 @@ export default function App() {
             </p>
 
             <div>
-              <h2 className="text-2xl font-extrabold text-slate-900 leading-tight">{guardName}</h2>
+              <h2 className="text-2xl font-extrabold text-slate-900 leading-tight">
+                {guardName}
+              </h2>
               <p className="text-xs text-slate-500 mt-1">
                 {isSupervisor
                   ? "Panel de supervisión y seguimiento operativo"
@@ -1705,61 +1634,15 @@ export default function App() {
           </div>
 
           <div className="w-16 h-16 rounded-3xl bg-white shadow-md flex items-center justify-center overflow-hidden border border-slate-100">
-            <img
-              src={logoJLBS}
-              alt="JLBS"
-              className="w-12 h-12 object-contain scale-110"
-            />
+            <img src={logoJLBS} alt="JLBS" className="w-12 h-12 object-contain scale-110" />
           </div>
         </div>
 
-        <div className="bg-slate-900 text-white p-6 rounded-[2rem] shadow-[0_20px_60px_rgba(15,23,42,0.18)] mb-5 relative overflow-hidden border border-slate-800">
-          <div className="relative z-10">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1">Turno Activo</p>
-                <h3 className="text-2xl font-bold">{shift}</h3>
-              </div>
-
-              {isSupervisor && (
-                <div className="text-right">
-                  <p className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Hora actual</p>
-                  <p className="text-sm font-bold text-white mt-1">{formatOnlyTime(dashboardNow)}</p>
-                </div>
-              )}
-            </div>
-
-            <div className="mt-5 inline-flex items-center gap-2 rounded-full bg-white/5 border border-white/10 px-3 py-2 text-[#0dcaf2] text-[11px] font-extrabold uppercase tracking-widest">
-              <div className="w-2 h-2 bg-[#0dcaf2] rounded-full animate-pulse" />
-              En servicio
-            </div>
-
-            {isSupervisor && (
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                <div className="rounded-2xl bg-white/5 border border-white/10 px-3 py-3">
-                  <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Rol</div>
-                  <div className="text-sm font-bold text-white mt-1">Supervisor</div>
-                </div>
-                <div className="rounded-2xl bg-white/5 border border-white/10 px-3 py-3">
-                  <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">Estado</div>
-                  <div
-                    className={cn(
-                      "text-sm font-bold mt-1",
-                      supervisorTodaySummary.hasOpenEntry ? "text-amber-300" : "text-emerald-300"
-                    )}
-                  >
-                    {supervisorSummaryLoading
-                      ? "Cargando..."
-                      : supervisorTodaySummary.hasOpenEntry
-                      ? "Salida pendiente"
-                      : "Sin pendientes"}
-                  </div>
-                </div>
-              </div>
-            )}
+        <div className="mb-5">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+            Turno
           </div>
-
-          <Shield className="absolute right-[-20px] bottom-[-20px] w-32 h-32 text-white/5 rotate-12" />
+          <div className="text-xl font-extrabold text-slate-900 mt-1">{shift}</div>
         </div>
 
         {isSupervisor && (
@@ -1775,7 +1658,9 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-slate-400">
                     <Activity className="w-4 h-4" />
-                    <span className="text-[10px] font-bold uppercase tracking-widest">Hoy</span>
+                    <span className="text-[10px] font-bold uppercase tracking-widest">
+                      Hoy
+                    </span>
                   </div>
 
                   <div className="w-8 h-8 rounded-xl bg-slate-50 flex items-center justify-center">
@@ -1787,14 +1672,18 @@ export default function App() {
                   {supervisorSummaryLoading ? "..." : supervisorTodaySummary.todayCount}
                 </div>
 
-                <div className="text-xs text-slate-500 mt-2">Toca para ver registros del día</div>
+                <div className="text-xs text-slate-500 mt-2">
+                  Toca para ver registros del día
+                </div>
               </button>
 
               <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-slate-400">
                     <Clock3 className="w-4 h-4" />
-                    <span className="text-[10px] font-bold uppercase tracking-widest">Estado</span>
+                    <span className="text-[10px] font-bold uppercase tracking-widest">
+                      Estado
+                    </span>
                   </div>
 
                   <div
@@ -1812,7 +1701,9 @@ export default function App() {
                 <div
                   className={cn(
                     "mt-4 text-sm font-extrabold leading-tight",
-                    supervisorTodaySummary.hasOpenEntry ? "text-amber-700" : "text-emerald-700"
+                    supervisorTodaySummary.hasOpenEntry
+                      ? "text-amber-700"
+                      : "text-emerald-700"
                   )}
                 >
                   {supervisorSummaryLoading
@@ -1838,7 +1729,9 @@ export default function App() {
                   </div>
 
                   <div className="flex-1">
-                    <div className="text-sm font-extrabold text-amber-900">Supervisión abierta</div>
+                    <div className="text-sm font-extrabold text-amber-900">
+                      Supervisión abierta
+                    </div>
                     <div className="text-xs text-amber-800 mt-1">
                       Servicio:{" "}
                       <span className="font-bold">
@@ -1867,7 +1760,9 @@ export default function App() {
             <div className="bg-white rounded-[2rem] p-4 shadow-sm border border-slate-100 mb-5">
               <div className="flex items-center gap-2 text-slate-400 mb-2">
                 <MapPinned className="w-4 h-4" />
-                <span className="text-[10px] font-bold uppercase tracking-widest">Última actividad</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest">
+                  Última actividad
+                </span>
               </div>
 
               <div className="text-base font-extrabold text-slate-900 leading-tight">
@@ -1880,7 +1775,9 @@ export default function App() {
                 {supervisorSummaryLoading
                   ? "Obteniendo último movimiento..."
                   : supervisorTodaySummary.lastItem
-                  ? `${String(supervisorSummaryTodayLabel(supervisorTodaySummary.lastItem.tipo))} • ${
+                  ? `${String(
+                      supervisorSummaryTodayLabel(supervisorTodaySummary.lastItem.tipo)
+                    )} • ${
                       formatDateTime(
                         supervisorSummaryTodayValue(supervisorTodaySummary.lastItem?.hora)
                       ).time
@@ -1891,150 +1788,189 @@ export default function App() {
           </>
         )}
 
-        <div className="grid grid-cols-2 gap-4 mb-5">
-          {isGuard && (
-            <>
+        <div className="relative mb-5">
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden">
+            <img
+              src={logoJLBS}
+              alt="Marca de agua JLBS"
+              className="w-[880px] max-w-[78%] opacity-[0.16] object-contain"
+            />
+          </div>
+
+          <div className="relative grid grid-cols-2 gap-4">
+            {isGuard && (
+              <>
+                <button
+                  onClick={() => setScreen("timeclock")}
+                  className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition"
+                >
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    Opción
+                  </div>
+                  <div className="text-lg font-bold text-slate-900 mt-1">
+                    Control horario
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    Fichaje de entrada/salida
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => setScreen("guard-history")}
+                  className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition"
+                >
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    Opción
+                  </div>
+                  <div className="text-lg font-bold text-slate-900 mt-1">Historial</div>
+                  <div className="text-xs text-slate-500 mt-1">Últimos registros</div>
+                </button>
+
+                <button
+                  onClick={() => setScreen("unit-inspection")}
+                  className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition col-span-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                      <ClipboardList className="w-5 h-5" />
+                    </div>
+
+                    <div className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 text-[10px] font-extrabold uppercase tracking-widest border border-amber-100">
+                      Unidad
+                    </div>
+                  </div>
+
+                  <div className="mt-5">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                      Módulo
+                    </div>
+                    <div className="text-xl font-extrabold text-slate-900 mt-1">
+                      Inspección de unidad
+                    </div>
+                    <div className="text-xs text-slate-500 mt-2 leading-relaxed">
+                      Revisión vehicular, incidencias, niveles y observaciones.
+                    </div>
+                  </div>
+                </button>
+              </>
+            )}
+
+            {isSupervisor && (
+              <>
+                <button
+                  onClick={() => setScreen("supervisor")}
+                  className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition group hover:shadow-md"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-12 h-12 rounded-2xl bg-[#0dcaf2]/10 text-[#0dcaf2] flex items-center justify-center">
+                      <ClipboardList className="w-5 h-5" />
+                    </div>
+
+                    <div className="px-2.5 py-1 rounded-full bg-cyan-50 text-[#0dcaf2] text-[10px] font-extrabold uppercase tracking-widest border border-cyan-100">
+                      Acción
+                    </div>
+                  </div>
+
+                  <div className="mt-5">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                      Módulo
+                    </div>
+                    <div className="text-xl font-extrabold text-slate-900 mt-1">
+                      Supervisión
+                    </div>
+                    <div className="text-xs text-slate-500 mt-2 leading-relaxed">
+                      Registrar entrada, salida, novedades y evidencia del servicio.
+                    </div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => setScreen("supervisor-guards-history")}
+                  className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition group hover:shadow-md"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                      <Eye className="w-5 h-5" />
+                    </div>
+
+                    <div className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-extrabold uppercase tracking-widest border border-emerald-100">
+                      Consulta
+                    </div>
+                  </div>
+
+                  <div className="mt-5">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                      Consulta
+                    </div>
+                    <div className="text-xl font-extrabold text-slate-900 mt-1">Guardias</div>
+                    <div className="text-xs text-slate-500 mt-2 leading-relaxed">
+                      Revisa entradas, salidas, evidencias y ubicaciones del personal.
+                    </div>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setSupervisorHistoryFilter("all");
+                    setScreen("supervisor-history");
+                  }}
+                  className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition group hover:shadow-md col-span-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center">
+                      <FileText className="w-5 h-5" />
+                    </div>
+
+                    <div className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-[10px] font-extrabold uppercase tracking-widest border border-slate-200">
+                      Consulta
+                    </div>
+                  </div>
+
+                  <div className="mt-5">
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                      Módulo
+                    </div>
+                    <div className="text-xl font-extrabold text-slate-900 mt-1">Historial</div>
+                    <div className="text-xs text-slate-500 mt-2 leading-relaxed">
+                      Revisa supervisiones, evidencias y movimientos recientes.
+                    </div>
+                  </div>
+                </button>
+              </>
+            )}
+
+            {!isGuard && !isSupervisor && (
               <button
-                onClick={() => setScreen("timeclock")}
-                className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition"
+                onClick={() => alert("Rol sin menú asignado todavía")}
+                className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition col-span-2"
               >
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Opción</div>
-                <div className="text-lg font-bold text-slate-900 mt-1">Control horario</div>
-                <div className="text-xs text-slate-500 mt-1">Fichaje de entrada/salida</div>
-              </button>
-
-              <button
-                onClick={() => setScreen("guard-history")}
-                className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition"
-              >
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Opción</div>
-                <div className="text-lg font-bold text-slate-900 mt-1">Historial</div>
-                <div className="text-xs text-slate-500 mt-1">Últimos registros</div>
-              </button>
-
-              <button
-                onClick={() => setScreen("unit-inspection")}
-                className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition col-span-2"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center">
-                    <ClipboardList className="w-5 h-5" />
-                  </div>
-
-                  <div className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 text-[10px] font-extrabold uppercase tracking-widest border border-amber-100">
-                    Unidad
-                  </div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                  Opción
                 </div>
-
-                <div className="mt-5">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Módulo</div>
-                  <div className="text-xl font-extrabold text-slate-900 mt-1">Inspección de unidad</div>
-                  <div className="text-xs text-slate-500 mt-2 leading-relaxed">
-                    Revisión vehicular, incidencias, niveles y observaciones.
-                  </div>
+                <div className="text-lg font-bold text-slate-900 mt-1">
+                  Panel disponible pronto
+                </div>
+                <div className="text-xs text-slate-500 mt-1">
+                  Estamos preparando el acceso para este rol
                 </div>
               </button>
-            </>
-          )}
-
-          {isSupervisor && (
-            <>
-              <button
-                onClick={() => setScreen("supervisor")}
-                className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition group hover:shadow-md"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="w-12 h-12 rounded-2xl bg-[#0dcaf2]/10 text-[#0dcaf2] flex items-center justify-center">
-                    <ClipboardList className="w-5 h-5" />
-                  </div>
-
-                  <div className="px-2.5 py-1 rounded-full bg-cyan-50 text-[#0dcaf2] text-[10px] font-extrabold uppercase tracking-widest border border-cyan-100">
-                    Acción
-                  </div>
-                </div>
-
-                <div className="mt-5">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Módulo</div>
-                  <div className="text-xl font-extrabold text-slate-900 mt-1">Supervisión</div>
-                  <div className="text-xs text-slate-500 mt-2 leading-relaxed">
-                    Registrar entrada, salida, novedades y evidencia del servicio.
-                  </div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setScreen("supervisor-guards-history")}
-                className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition group hover:shadow-md"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
-                    <Eye className="w-5 h-5" />
-                  </div>
-
-                  <div className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-extrabold uppercase tracking-widest border border-emerald-100">
-                    Consulta
-                  </div>
-                </div>
-
-                <div className="mt-5">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Consulta</div>
-                  <div className="text-xl font-extrabold text-slate-900 mt-1">Guardias</div>
-                  <div className="text-xs text-slate-500 mt-2 leading-relaxed">
-                    Revisa entradas, salidas, evidencias y ubicaciones del personal.
-                  </div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => {
-                  setSupervisorHistoryFilter("all");
-                  setScreen("supervisor-history");
-                }}
-                className="bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition group hover:shadow-md col-span-2"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center">
-                    <FileText className="w-5 h-5" />
-                  </div>
-
-                  <div className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-[10px] font-extrabold uppercase tracking-widest border border-slate-200">
-                    Consulta
-                  </div>
-                </div>
-
-                <div className="mt-5">
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Módulo</div>
-                  <div className="text-xl font-extrabold text-slate-900 mt-1">Historial</div>
-                  <div className="text-xs text-slate-500 mt-2 leading-relaxed">
-                    Revisa supervisiones, evidencias y movimientos recientes.
-                  </div>
-                </div>
-              </button>
-            </>
-          )}
-
-          {!isGuard && !isSupervisor && (
-            <button
-              onClick={() => alert("Rol sin menú asignado todavía")}
-              className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 text-left active:scale-[0.99] transition col-span-2"
-            >
-              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Opción</div>
-              <div className="text-lg font-bold text-slate-900 mt-1">Panel disponible pronto</div>
-              <div className="text-xs text-slate-500 mt-1">Estamos preparando el acceso para este rol</div>
-            </button>
-          )}
+            )}
+          </div>
         </div>
 
-        <div className={cn("mt-auto", isSupervisor && supervisorTodaySummary.hasOpenEntry ? "pt-8" : "pt-6")}>
+        <div
+          className={cn(
+            "mt-auto",
+            isSupervisor && supervisorTodaySummary.hasOpenEntry ? "pt-8" : "pt-6"
+          )}
+        >
           <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm p-4">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
                   Sesión activa
                 </div>
-                <div className="text-sm font-bold text-slate-900 mt-1">
-                  {guardName}
-                </div>
+                <div className="text-sm font-bold text-slate-900 mt-1">{guardName}</div>
                 <div className="text-xs text-slate-500 mt-1">
                   {userRole === "supervisor"
                     ? "Supervisor en turno"
@@ -2054,42 +1990,44 @@ export default function App() {
           </div>
         </div>
 
-        {isSupervisor && supervisorTodaySummary.hasOpenEntry && supervisorTodaySummary.openEntry && (
-          <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-md z-50">
-            <div className="rounded-[1.75rem] bg-slate-900 text-white shadow-[0_18px_50px_rgba(15,23,42,0.35)] border border-slate-800 px-4 py-4 backdrop-blur-sm">
-              <div className="flex items-start gap-3">
-                <div className="w-11 h-11 rounded-2xl bg-amber-400/15 text-amber-300 flex items-center justify-center shrink-0">
-                  <CircleAlert className="w-5 h-5" />
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">
-                    Acción pendiente
+        {isSupervisor &&
+          supervisorTodaySummary.hasOpenEntry &&
+          supervisorTodaySummary.openEntry && (
+            <div className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-md z-50">
+              <div className="rounded-[1.75rem] bg-slate-900 text-white shadow-[0_18px_50px_rgba(15,23,42,0.35)] border border-slate-800 px-4 py-4 backdrop-blur-sm">
+                <div className="flex items-start gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-amber-400/15 text-amber-300 flex items-center justify-center shrink-0">
+                    <CircleAlert className="w-5 h-5" />
                   </div>
 
-                  <div className="text-sm font-extrabold text-white mt-1 truncate">
-                    Cerrar supervisión en {supervisorTodaySummary.openEntry.servicio_nombre}
-                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-widest text-slate-400 font-bold">
+                      Acción pendiente
+                    </div>
 
-                  <div className="text-xs text-slate-300 mt-1">
-                    Entrada registrada a las{" "}
-                    <span className="font-bold text-white">
-                      {formatDateTime(supervisorTodaySummary.openEntry.hora).time}
-                    </span>
-                  </div>
+                    <div className="text-sm font-extrabold text-white mt-1 truncate">
+                      Cerrar supervisión en {supervisorTodaySummary.openEntry.servicio_nombre}
+                    </div>
 
-                  <button
-                    onClick={() => setScreen("supervisor")}
-                    className="mt-3 w-full py-3.5 rounded-2xl bg-[#0dcaf2] text-white font-extrabold text-xs inline-flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20"
-                  >
-                    IR A REGISTRAR SALIDA
-                    <ArrowUpRight className="w-4 h-4" />
-                  </button>
+                    <div className="text-xs text-slate-300 mt-1">
+                      Entrada registrada a las{" "}
+                      <span className="font-bold text-white">
+                        {formatDateTime(supervisorTodaySummary.openEntry.hora).time}
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={() => setScreen("supervisor")}
+                      className="mt-3 w-full py-3.5 rounded-2xl bg-[#0dcaf2] text-white font-extrabold text-xs inline-flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/20"
+                    >
+                      IR A REGISTRAR SALIDA
+                      <ArrowUpRight className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
       </div>
     );
   }

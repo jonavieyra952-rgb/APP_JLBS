@@ -8,6 +8,7 @@ import timeclockRoutes from "./routes/timeclock";
 import adminRoutes from "./routes/admin";
 import servicesRoutes from "./routes/services";
 import supervisionRoutes from "./routes/supervision";
+import supervisionScheduleRoutes from "./routes/supervisionSchedule.routes";
 import unitInspectionRoutes from "./routes/unitInspection";
 import { requireAuth } from "./middleware/authMiddleware";
 
@@ -42,6 +43,7 @@ app.use("/api/unit-inspection", requireAuth, unitInspectionRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api", servicesRoutes);
 app.use("/api", supervisionRoutes);
+app.use("/api", supervisionScheduleRoutes);
 
 app.get("/api/health", async (_req, res) => {
   try {

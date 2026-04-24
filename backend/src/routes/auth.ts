@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { pool } from "../db";
 import { sendVerificationEmail } from "../mailer";
+import { requireAuth, type AuthRequest } from "../middleware/authMiddleware";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "cambia_esto";
@@ -22,24 +23,25 @@ function addMinutes(date: Date, minutes: number) {
  * - Crea usuario con verificado=0
  * - Genera código, guarda hash + expiración
  * - Envía correo
+ * - El turno se asigna automáticamente por defecto usando catalogo_turnos
  */
 router.post("/register", async (req, res) => {
   try {
-    const { nombre, email, password, turno } = req.body;
+    const { nombre, email, password } = req.body;
 
-    if (!nombre || !email || !password || !turno) {
+    if (!nombre || !email || !password) {
       return res.status(400).json({ success: false, error: "Faltan datos" });
     }
 
-    if (!["Matutino", "Nocturno"].includes(turno)) {
-      return res.status(400).json({ success: false, error: "Turno inválido" });
+    const nombreNorm = String(nombre).trim();
+    const emailNorm = String(email).trim().toLowerCase();
+    const passwordNorm = String(password);
+
+    if (!nombreNorm) {
+      return res.status(400).json({ success: false, error: "El nombre es obligatorio" });
     }
 
-    const roleNorm = "guard";
-
-    const emailNorm = String(email).trim().toLowerCase();
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
     if (!emailRegex.test(emailNorm)) {
       return res.status(400).json({ success: false, error: "Correo inválido" });
     }
@@ -53,7 +55,32 @@ router.post("/register", async (req, res) => {
       return res.status(409).json({ success: false, error: "Ese email ya existe" });
     }
 
-    const password_hash = await bcrypt.hash(password, 10);
+    const roleNorm = "guard";
+
+    const [defaultShiftRows]: any = await pool.query(
+      `SELECT id, nombre
+       FROM catalogo_turnos
+       WHERE activo = 1
+       ORDER BY
+         CASE
+           WHEN nombre = 'Matutino' THEN 0
+           WHEN nombre = 'Nocturno' THEN 1
+           ELSE 2
+         END,
+         id ASC
+       LIMIT 1`
+    );
+
+    if (defaultShiftRows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "No hay turnos activos disponibles en el catálogo.",
+      });
+    }
+
+    const turnoId = Number(defaultShiftRows[0].id);
+
+    const password_hash = await bcrypt.hash(passwordNorm, 10);
 
     const code = makeCode();
     const codeHash = await bcrypt.hash(code, 10);
@@ -64,14 +91,15 @@ router.post("/register", async (req, res) => {
         nombre,
         email,
         password_hash,
-        turno,
+        turno_id,
         role,
         verificado,
         codigo_verificacion_hash,
-        expiracion_codigo
+        expiracion_codigo,
+        activo
       )
-      VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
-      [nombre, emailNorm, password_hash, turno, roleNorm, codeHash, expires]
+      VALUES (?, ?, ?, ?, ?, 0, ?, ?, 1)`,
+      [nombreNorm, emailNorm, password_hash, turnoId, roleNorm, codeHash, expires]
     );
 
     await sendVerificationEmail(emailNorm, code);
@@ -81,9 +109,9 @@ router.post("/register", async (req, res) => {
       message: "Registrado. Revisa tu correo para el código de verificación.",
       user: {
         id: result.insertId,
-        nombre,
+        nombre: nombreNorm,
         email: emailNorm,
-        turno,
+        turno_id: turnoId,
         role: roleNorm,
         verificado: 0,
       },
@@ -212,7 +240,7 @@ router.post("/resend-code", async (req, res) => {
 /**
  * LOGIN
  * - Bloquea si verificado=0
- * - Sigue devolviendo role para futuros supervisores/admins creados desde panel web
+ * - Devuelve turno, unidad y servicio asignado si existen
  */
 router.post("/login", async (req, res) => {
   try {
@@ -225,9 +253,25 @@ router.post("/login", async (req, res) => {
     const emailNorm = String(email).trim().toLowerCase();
 
     const [rows]: any = await pool.query(
-      `SELECT id, nombre, email, password_hash, turno, role, activo, verificado
-       FROM usuarios
-       WHERE email = ?
+      `SELECT
+         u.id,
+         u.nombre,
+         u.email,
+         u.password_hash,
+         u.turno_id,
+         ct.nombre AS turno,
+         u.role,
+         u.activo,
+         u.verificado,
+         u.unidad_id,
+         un.nombre AS unidad_nombre,
+         u.servicio_id,
+         s.nombre AS servicio_nombre
+       FROM usuarios u
+       LEFT JOIN catalogo_turnos ct ON ct.id = u.turno_id
+       LEFT JOIN unidades un ON un.id = u.unidad_id
+       LEFT JOIN servicios s ON s.id = u.servicio_id
+       WHERE u.email = ?
        LIMIT 1`,
       [emailNorm]
     );
@@ -273,13 +317,83 @@ router.post("/login", async (req, res) => {
         id: user.id,
         nombre: user.nombre,
         email: user.email,
-        turno: user.turno,
+        turno: user.turno || "",
+        turno_id: user.turno_id ?? null,
         role: user.role || "guard",
+        unidad_id: user.unidad_id ?? null,
+        unidad_nombre: user.unidad_nombre || null,
+        servicio_id: user.servicio_id ?? null,
+        servicio_nombre: user.servicio_nombre || null,
       },
     });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ success: false, error: "Error en login" });
+  }
+});
+
+/**
+ * PERFIL AUTENTICADO
+ */
+router.get("/me", requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "No autorizado" });
+    }
+
+    const [rows]: any = await pool.query(
+      `SELECT
+         u.id,
+         u.nombre,
+         u.email,
+         u.turno_id,
+         ct.nombre AS turno,
+         u.role,
+         u.activo,
+         u.verificado,
+         u.unidad_id,
+         un.nombre AS unidad_nombre,
+         u.servicio_id,
+         s.nombre AS servicio_nombre,
+         s.activo AS servicio_activo
+       FROM usuarios u
+       LEFT JOIN catalogo_turnos ct ON ct.id = u.turno_id
+       LEFT JOIN unidades un ON un.id = u.unidad_id
+       LEFT JOIN servicios s ON s.id = u.servicio_id
+       WHERE u.id = ?
+       LIMIT 1`,
+      [userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: "Usuario no encontrado" });
+    }
+
+    const user = rows[0];
+
+    return res.json({
+      success: true,
+      user: {
+        id: user.id,
+        nombre: user.nombre,
+        email: user.email,
+        turno: user.turno || "",
+        turno_id: user.turno_id ?? null,
+        role: user.role || "guard",
+        activo: user.activo,
+        verificado: user.verificado,
+        unidad_id: user.unidad_id ?? null,
+        unidad_nombre: user.unidad_nombre || null,
+        servicio_id: user.servicio_id ?? null,
+        servicio_nombre: user.servicio_nombre || null,
+        servicio_activo: user.servicio_activo ?? null,
+      },
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ success: false, error: "Error al obtener perfil" });
   }
 });
 

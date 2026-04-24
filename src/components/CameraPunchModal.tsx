@@ -5,15 +5,26 @@ import { cn } from "../lib/utils";
 
 type Props = {
   open: boolean;
-  tipo: "IN" | "OUT" | null;
+  tipo?: string | null;
+  title?: string;
+  subtitle?: string;
+  headerLabel?: string;
   servicio: string;
-  jornada: string;
   shift: string;
+  unidad?: string;
+  jornada?: string;
   initialLat?: number | null;
   initialLng?: number | null;
   onClose: () => void;
-  onConfirm: (payload: { blob: Blob; lat: number | null; lng: number | null }) => void;
+  onConfirm: (payload: { blob: Blob; lat: number | null; lng: number | null }) => void | Promise<void>;
 };
+
+function getTipoLabel(tipo?: string | null) {
+  const normalized = String(tipo || "").toUpperCase().trim();
+  if (normalized === "IN") return "Entrada";
+  if (normalized === "OUT") return "Salida";
+  return "Registro";
+}
 
 function formatOverlayNow(date: Date) {
   const fecha = date.toLocaleDateString("es-MX", {
@@ -28,7 +39,7 @@ function formatOverlayNow(date: Date) {
     second: "2-digit",
   });
 
-  return `${fecha} ${hora}`;
+  return `${fecha} ${hora.toLowerCase()}`;
 }
 
 function drawWrappedText(
@@ -63,9 +74,11 @@ function drawWrappedText(
 
 export default function CameraPunchModal({
   open,
-  tipo,
+  tipo = null,
+  title,
+  subtitle,
+  headerLabel,
   servicio,
-  jornada,
   shift,
   initialLat = null,
   initialLng = null,
@@ -79,7 +92,14 @@ export default function CameraPunchModal({
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
   const [capturedUrl, setCapturedUrl] = useState("");
   const [processing, setProcessing] = useState(false);
-  const [locating, setLocating] = useState(false);
+
+  const tipoLabel = getTipoLabel(tipo);
+
+  const resolvedTitle = title || `Foto obligatoria de ${tipoLabel.toLowerCase()}`;
+  const resolvedSubtitle =
+    subtitle ||
+    "Toma la foto directamente con la cámara. Debe verse claramente tu rostro y que estás en el servicio establecido.";
+  const resolvedHeaderLabel = headerLabel || tipoLabel.toUpperCase();
 
   useEffect(() => {
     if (!open) {
@@ -104,9 +124,6 @@ export default function CameraPunchModal({
   }, [open, initialLat, initialLng]);
 
   const getNativeLocation = async () => {
-    setLocating(true);
-    setCameraError("");
-
     try {
       const permissions = await Geolocation.requestPermissions();
 
@@ -130,29 +147,108 @@ export default function CameraPunchModal({
       setLat(newLat);
       setLng(newLng);
       setLocationText(`Lat: ${newLat.toFixed(6)} | Lng: ${newLng.toFixed(6)}`);
+
+      return { lat: newLat, lng: newLng };
     } catch (err: any) {
       setLat(null);
       setLng(null);
       setLocationText("Ubicación no disponible");
-      setCameraError(err?.message || "No se pudo obtener la ubicación.");
-    } finally {
-      setLocating(false);
+      throw new Error(err?.message || "No se pudo obtener la ubicación.");
     }
   };
 
-  const takeNativePhoto = async () => {
-    setCameraError("");
-    setProcessing(true);
+  const buildAnnotatedImage = async (blob: Blob) => {
+    const imageUrl = URL.createObjectURL(blob);
 
     try {
-      const permissions = await Camera.requestPermissions();
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = reject;
+        image.src = imageUrl;
+      });
 
-      const granted =
-        permissions.camera === "granted" || permissions.photos === "granted";
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
 
-      if (!granted) {
-        throw new Error("Debes permitir la cámara para continuar.");
+      if (!ctx) {
+        throw new Error("No se pudo procesar la imagen.");
       }
+
+      canvas.width = img.width;
+      canvas.height = img.height;
+
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      const overlayHeight = Math.max(canvas.height * 0.22, 180);
+      const overlayY = canvas.height - overlayHeight;
+
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(0, overlayY, canvas.width, overlayHeight);
+
+      const paddingX = Math.max(canvas.width * 0.03, 20);
+      let currentY = overlayY + Math.max(canvas.height * 0.04, 34);
+      const lineHeight = Math.max(canvas.height * 0.032, 24);
+      const maxTextWidth = canvas.width - paddingX * 2;
+
+      ctx.fillStyle = "#ffffff";
+
+      ctx.font = `bold ${Math.max(canvas.width * 0.04, 26)}px sans-serif`;
+      ctx.fillText(
+        `${resolvedHeaderLabel} • ${formatOverlayNow(new Date())}`,
+        paddingX,
+        currentY
+      );
+
+      currentY += lineHeight * 1.05;
+
+      ctx.font = `${Math.max(canvas.width * 0.03, 20)}px sans-serif`;
+      ctx.fillText(`Tipo: ${tipoLabel}`, paddingX, currentY);
+
+      currentY += lineHeight;
+      ctx.fillText(`Turno: ${shift || "No disponible"}`, paddingX, currentY);
+
+      currentY += lineHeight;
+      currentY = drawWrappedText(
+        ctx,
+        `Servicio: ${servicio || "No disponible"}`,
+        paddingX,
+        currentY,
+        maxTextWidth,
+        lineHeight
+      );
+
+      currentY += lineHeight;
+      const ubicacionTexto =
+        lat != null && lng != null
+          ? `Ubicación: ${lat.toFixed(6)}, ${lng.toFixed(6)}`
+          : "Ubicación: no disponible";
+
+      drawWrappedText(ctx, ubicacionTexto, paddingX, currentY, maxTextWidth, lineHeight);
+
+      const finalBlob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((result) => {
+          if (result) resolve(result);
+          else reject(new Error("No se pudo generar la imagen final."));
+        }, "image/jpeg", 0.92);
+      });
+
+      if (capturedUrl) URL.revokeObjectURL(capturedUrl);
+      const finalUrl = URL.createObjectURL(finalBlob);
+
+      setCapturedBlob(finalBlob);
+      setCapturedUrl(finalUrl);
+    } finally {
+      URL.revokeObjectURL(imageUrl);
+    }
+  };
+
+  const openCamera = async () => {
+    setProcessing(true);
+    setCameraError("");
+
+    try {
+      await getNativeLocation();
 
       const photo = await Camera.getPhoto({
         quality: 90,
@@ -168,7 +264,7 @@ export default function CameraPunchModal({
       const response = await fetch(photo.webPath);
       const blob = await response.blob();
 
-      await drawOverlayOnImage(blob);
+      await buildAnnotatedImage(blob);
     } catch (err: any) {
       setCameraError(err?.message || "No se pudo tomar la foto.");
     } finally {
@@ -176,198 +272,93 @@ export default function CameraPunchModal({
     }
   };
 
-  const drawOverlayOnImage = async (fileOrBlob: Blob) => {
-    setProcessing(true);
-    setCameraError("");
-
-    try {
-      const imageUrl = URL.createObjectURL(fileOrBlob);
-
-      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const image = new Image();
-        image.onload = () => resolve(image);
-        image.onerror = reject;
-        image.src = imageUrl;
-      });
-
-      const canvas = document.createElement("canvas");
-      const width = img.width;
-      const height = img.height;
-      canvas.width = width;
-      canvas.height = height;
-
-      const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("No se pudo preparar la imagen");
-
-      ctx.drawImage(img, 0, 0, width, height);
-
-      const overlayHeight = Math.max(300, Math.floor(height * 0.30));
-      const overlayY = height - overlayHeight;
-      const paddingX = 28;
-      const titleSize = Math.max(32, Math.floor(width * 0.036));
-      const bodySize = Math.max(24, Math.floor(width * 0.026));
-      const lineHeight = Math.max(34, Math.floor(width * 0.032));
-      const maxTextWidth = width - paddingX * 2;
-
-      ctx.fillStyle = "rgba(0, 0, 0, 0.62)";
-      ctx.fillRect(0, overlayY, width, overlayHeight);
-
-      ctx.fillStyle = "#ffffff";
-      ctx.font = `bold ${titleSize}px Arial`;
-      ctx.fillText(
-        `${tipo === "IN" ? "ENTRADA" : "SALIDA"} • ${formatOverlayNow(new Date())}`,
-        paddingX,
-        overlayY + 46
-      );
-
-      ctx.font = `${bodySize}px Arial`;
-
-      let currentY = overlayY + 95;
-      ctx.fillText(`Turno: ${shift}`, paddingX, currentY);
-
-      currentY += lineHeight + 6;
-      currentY = drawWrappedText(
-        ctx,
-        `Servicio: ${servicio}`,
-        paddingX,
-        currentY,
-        maxTextWidth,
-        lineHeight
-      );
-
-      currentY += lineHeight + 6;
-      ctx.fillText(`Jornada: ${jornada}`, paddingX, currentY);
-
-      currentY += lineHeight + 6;
-      const geoText =
-        lat != null && lng != null
-          ? `Ubicación: ${lat.toFixed(6)}, ${lng.toFixed(6)}`
-          : "Ubicación: no disponible";
-
-      drawWrappedText(ctx, geoText, paddingX, currentY, maxTextWidth, lineHeight);
-
-      const finalBlob: Blob = await new Promise((resolve, reject) => {
-        canvas.toBlob(
-          (b) => {
-            if (b) resolve(b);
-            else reject(new Error("No se pudo generar la imagen"));
-          },
-          "image/jpeg",
-          0.92
-        );
-      });
-
-      if (capturedUrl) URL.revokeObjectURL(capturedUrl);
-      const previewUrl = URL.createObjectURL(finalBlob);
-
-      setCapturedBlob(finalBlob);
-      setCapturedUrl(previewUrl);
-
-      URL.revokeObjectURL(imageUrl);
-    } catch (err: any) {
-      setCameraError(err?.message || "No se pudo procesar la foto");
-    } finally {
-      setProcessing(false);
-    }
-  };
-
-  const handleClose = () => {
-    if (capturedUrl) URL.revokeObjectURL(capturedUrl);
-    onClose();
+  const handleUsePhoto = async () => {
+    if (!capturedBlob) return;
+    await onConfirm({ blob: capturedBlob, lat, lng });
   };
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] bg-slate-900/70 backdrop-blur-[2px] flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-white rounded-3xl border border-slate-100 shadow-2xl overflow-hidden">
-        <div className="p-5 border-b border-slate-100">
-          <h3 className="text-xl font-extrabold text-slate-900 text-center">
-            {tipo === "IN" ? "Foto obligatoria de entrada" : "Foto obligatoria de salida"}
-          </h3>
+    <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-[2px] flex items-center justify-center px-4">
+      <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-100 overflow-hidden">
+        <div className="p-6 text-center border-b border-slate-200">
+          <h3 className="text-xl font-extrabold text-slate-900">{resolvedTitle}</h3>
 
-          <p className="text-xs text-slate-500 text-center mt-2">
-            La foto incluirá hora, ubicación, servicio, jornada y turno.
+          <p className="text-sm text-slate-600 mt-3 leading-relaxed">
+            {resolvedSubtitle}
           </p>
-
-          <div className="mt-3 rounded-2xl bg-amber-50 border border-amber-200 px-4 py-3">
-            <p className="text-xs font-bold text-amber-800 text-center">
-              Asegúrate de que tu rostro se vea claramente en la foto como evidencia de asistencia.
-            </p>
-          </div>
         </div>
 
         <div className="p-4">
-          <div className="rounded-2xl overflow-hidden bg-slate-100 relative border border-slate-200 min-h-[280px] flex items-center justify-center">
-            {!capturedBlob ? (
-              <div className="p-6 text-center">
-                <div className="text-sm font-bold text-slate-700">
-                  Toma una sola foto donde se vea claramente tu rostro
-                </div>
-                <div className="text-xs text-slate-500 mt-2">{locationText}</div>
-              </div>
+          <div className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-100 min-h-[300px] flex items-center justify-center">
+            {capturedUrl ? (
+              <img
+                src={capturedUrl}
+                alt="Vista previa"
+                className="w-full h-auto object-cover"
+              />
             ) : (
-              <img src={capturedUrl} alt="Captura" className="w-full h-[360px] object-cover" />
+              <div className="px-6 py-10 text-center">
+                <div className="text-sm font-bold text-slate-700">
+                  Toma una foto con la cámara
+                </div>
+                <div className="text-xs text-slate-500 mt-3">{locationText}</div>
+              </div>
             )}
           </div>
 
-          {processing && (
-            <div className="mt-3 text-xs font-bold text-slate-500 text-center">
-              Procesando foto...
-            </div>
-          )}
-
           {cameraError && (
-            <div className="mt-3 rounded-xl bg-red-50 border border-red-100 text-red-700 text-xs font-bold p-3">
+            <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 text-center">
               {cameraError}
             </div>
           )}
 
-          {!capturedBlob && (
-            <div className="mt-3 flex justify-center">
-              <button
-                onClick={getNativeLocation}
-                disabled={locating || processing}
-                className={cn(
-                  "px-4 py-2 rounded-xl text-xs font-bold border",
-                  locating || processing
-                    ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
-                    : "bg-white text-slate-700 border-slate-200"
-                )}
-              >
-                {locating ? "OBTENIENDO UBICACIÓN..." : "REINTENTAR UBICACIÓN"}
-              </button>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3 mt-4">
-            <button
-              onClick={handleClose}
-              className="py-3 rounded-2xl bg-slate-100 text-slate-700 font-bold text-sm"
-            >
-              CANCELAR
-            </button>
-
+          <div className="grid grid-cols-2 gap-3 mt-5">
             {!capturedBlob ? (
-              <button
-                onClick={takeNativePhoto}
-                disabled={processing}
-                className={cn(
-                  "py-3 rounded-2xl font-bold text-sm",
-                  processing
-                    ? "bg-slate-200 text-slate-400 cursor-not-allowed"
-                    : "bg-[#0dcaf2] text-white"
-                )}
-              >
-                ABRIR CÁMARA
-              </button>
+              <>
+                <button
+                  onClick={onClose}
+                  disabled={processing}
+                  className={cn(
+                    "py-3 rounded-2xl font-bold text-sm border",
+                    processing
+                      ? "bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed"
+                      : "bg-slate-100 text-slate-700 border-slate-200"
+                  )}
+                >
+                  CANCELAR
+                </button>
+
+                <button
+                  onClick={openCamera}
+                  disabled={processing}
+                  className={cn(
+                    "py-3 rounded-2xl font-bold text-sm border",
+                    processing
+                      ? "bg-[#0dcaf2]/60 text-white border-[#0dcaf2]/60 cursor-not-allowed"
+                      : "bg-[#0dcaf2] text-white border-[#0dcaf2]"
+                  )}
+                >
+                  {processing ? "PROCESANDO..." : "ABRIR CÁMARA"}
+                </button>
+              </>
             ) : (
-              <button
-                onClick={() => capturedBlob && onConfirm({ blob: capturedBlob, lat, lng })}
-                className="py-3 rounded-2xl bg-slate-900 text-white font-bold text-sm"
-              >
-                USAR FOTO
-              </button>
+              <>
+                <button
+                  onClick={onClose}
+                  className="py-3 rounded-2xl bg-slate-100 text-slate-700 font-bold text-sm border border-slate-200"
+                >
+                  CANCELAR
+                </button>
+
+                <button
+                  onClick={handleUsePhoto}
+                  className="py-3 rounded-2xl bg-slate-900 text-white font-bold text-sm border border-slate-900"
+                >
+                  USAR FOTO
+                </button>
+              </>
             )}
           </div>
         </div>

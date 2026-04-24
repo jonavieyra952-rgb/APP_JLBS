@@ -14,9 +14,20 @@ const router = Router();
 router.get("/admin/services", requireAuth, requireRole("admin"), async (_req, res) => {
   try {
     const [rows]: any = await pool.query(
-      `SELECT id, nombre, direccion, responsable_cliente, telefono_contacto, guardias_requeridos, activo, created_at
-       FROM servicios
-       ORDER BY id DESC`
+      `SELECT
+        s.id,
+        s.nombre,
+        s.direccion,
+        s.responsable_cliente,
+        s.telefono_contacto,
+        s.guardias_requeridos,
+        s.turno_id,
+        ct.nombre AS turno,
+        s.activo,
+        s.created_at
+       FROM servicios s
+       LEFT JOIN catalogo_turnos ct ON ct.id = s.turno_id
+       ORDER BY s.id DESC`
     );
 
     return res.json({ success: true, services: rows });
@@ -35,7 +46,7 @@ router.post("/admin/services", requireAuth, requireRole("admin"), async (req: Au
       responsable_cliente,
       telefono_contacto,
       guardias_requeridos,
-      activo,
+      turno_id,
     } = req.body;
 
     if (!nombre) {
@@ -50,7 +61,27 @@ router.post("/admin/services", requireAuth, requireRole("admin"), async (req: Au
     const guardiasNum = Number(guardias_requeridos);
     const guardiasFinal = Number.isFinite(guardiasNum) && guardiasNum > 0 ? guardiasNum : 1;
 
-    const activoNorm = Number(activo) === 0 ? 0 : 1;
+    const turnoIdNorm =
+      turno_id === null || turno_id === "" || typeof turno_id === "undefined"
+        ? null
+        : Number(turno_id);
+
+    if (turnoIdNorm === null || !Number.isFinite(turnoIdNorm)) {
+      return res.status(400).json({ success: false, error: "Debes seleccionar un turno válido" });
+    }
+
+    const [shiftRows]: any = await pool.query(
+      "SELECT id, nombre, activo FROM catalogo_turnos WHERE id = ? LIMIT 1",
+      [turnoIdNorm]
+    );
+
+    if (shiftRows.length === 0) {
+      return res.status(400).json({ success: false, error: "El turno seleccionado no existe" });
+    }
+
+    if (Number(shiftRows[0].activo) !== 1) {
+      return res.status(400).json({ success: false, error: "El turno seleccionado está inactivo" });
+    }
 
     const [exists]: any = await pool.query(
       "SELECT id FROM servicios WHERE nombre = ? LIMIT 1",
@@ -62,9 +93,17 @@ router.post("/admin/services", requireAuth, requireRole("admin"), async (req: Au
     }
 
     const [result]: any = await pool.query(
-      `INSERT INTO servicios (nombre, direccion, responsable_cliente, telefono_contacto, guardias_requeridos, activo)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [nombreNorm, direccionNorm, responsableNorm, telefonoNorm, guardiasFinal, activoNorm]
+      `INSERT INTO servicios (
+        nombre,
+        direccion,
+        responsable_cliente,
+        telefono_contacto,
+        guardias_requeridos,
+        turno_id,
+        activo
+      )
+      VALUES (?, ?, ?, ?, ?, ?, 1)`,
+      [nombreNorm, direccionNorm, responsableNorm, telefonoNorm, guardiasFinal, turnoIdNorm]
     );
 
     return res.json({
@@ -77,7 +116,9 @@ router.post("/admin/services", requireAuth, requireRole("admin"), async (req: Au
         responsable_cliente: responsableNorm,
         telefono_contacto: telefonoNorm,
         guardias_requeridos: guardiasFinal,
-        activo: activoNorm,
+        turno_id: turnoIdNorm,
+        turno: String(shiftRows[0].nombre),
+        activo: 1,
       },
     });
   } catch (e) {
@@ -96,7 +137,9 @@ router.put("/admin/services/:id", requireAuth, requireRole("admin"), async (req,
       responsable_cliente,
       telefono_contacto,
       guardias_requeridos,
+      turno_id,
       activo,
+      created_at,
     } = req.body;
 
     if (!serviceId || Number.isNaN(serviceId)) {
@@ -117,6 +160,18 @@ router.put("/admin/services/:id", requireAuth, requireRole("admin"), async (req,
 
     const activoNorm = Number(activo) === 0 ? 0 : 1;
 
+    const fechaAltaNorm =
+      created_at && String(created_at).trim() ? `${String(created_at).trim()} 00:00:00` : null;
+
+    const turnoIdNorm =
+      turno_id === null || turno_id === "" || typeof turno_id === "undefined"
+        ? null
+        : Number(turno_id);
+
+    if (turnoIdNorm === null || !Number.isFinite(turnoIdNorm)) {
+      return res.status(400).json({ success: false, error: "Debes seleccionar un turno válido" });
+    }
+
     const [rows]: any = await pool.query(
       "SELECT id FROM servicios WHERE id = ? LIMIT 1",
       [serviceId]
@@ -132,14 +187,47 @@ router.put("/admin/services/:id", requireAuth, requireRole("admin"), async (req,
     );
 
     if (duplicate.length > 0) {
-      return res.status(409).json({ success: false, error: "Ya existe otro servicio con ese nombre" });
+      return res
+        .status(409)
+        .json({ success: false, error: "Ya existe otro servicio con ese nombre" });
+    }
+
+    const [shiftRows]: any = await pool.query(
+      "SELECT id, nombre, activo FROM catalogo_turnos WHERE id = ? LIMIT 1",
+      [turnoIdNorm]
+    );
+
+    if (shiftRows.length === 0) {
+      return res.status(400).json({ success: false, error: "El turno seleccionado no existe" });
+    }
+
+    if (Number(shiftRows[0].activo) !== 1) {
+      return res.status(400).json({ success: false, error: "El turno seleccionado está inactivo" });
     }
 
     await pool.query(
       `UPDATE servicios
-       SET nombre = ?, direccion = ?, responsable_cliente = ?, telefono_contacto = ?, guardias_requeridos = ?, activo = ?
+       SET
+         nombre = ?,
+         direccion = ?,
+         responsable_cliente = ?,
+         telefono_contacto = ?,
+         guardias_requeridos = ?,
+         turno_id = ?,
+         activo = ?,
+         created_at = COALESCE(?, created_at)
        WHERE id = ?`,
-      [nombreNorm, direccionNorm, responsableNorm, telefonoNorm, guardiasFinal, activoNorm, serviceId]
+      [
+        nombreNorm,
+        direccionNorm,
+        responsableNorm,
+        telefonoNorm,
+        guardiasFinal,
+        turnoIdNorm,
+        activoNorm,
+        fechaAltaNorm,
+        serviceId,
+      ]
     );
 
     return res.json({ success: true, message: "Servicio actualizado correctamente" });
@@ -170,10 +258,7 @@ router.patch("/admin/services/:id/status", requireAuth, requireRole("admin"), as
       return res.status(404).json({ success: false, error: "Servicio no encontrado" });
     }
 
-    await pool.query(
-      "UPDATE servicios SET activo = ? WHERE id = ?",
-      [activoNorm, serviceId]
-    );
+    await pool.query("UPDATE servicios SET activo = ? WHERE id = ?", [activoNorm, serviceId]);
 
     return res.json({
       success: true,
@@ -225,10 +310,19 @@ router.delete("/admin/services/:id", requireAuth, requireRole("admin"), async (r
 router.get("/services", async (_req, res) => {
   try {
     const [rows]: any = await pool.query(
-      `SELECT id, nombre, direccion, responsable_cliente, telefono_contacto, guardias_requeridos
-       FROM servicios
-       WHERE activo = 1
-       ORDER BY nombre ASC`
+      `SELECT
+        s.id,
+        s.nombre,
+        s.direccion,
+        s.responsable_cliente,
+        s.telefono_contacto,
+        s.guardias_requeridos,
+        s.turno_id,
+        ct.nombre AS turno
+       FROM servicios s
+       LEFT JOIN catalogo_turnos ct ON ct.id = s.turno_id
+       WHERE s.activo = 1
+       ORDER BY s.nombre ASC`
     );
 
     return res.json({ success: true, services: rows });

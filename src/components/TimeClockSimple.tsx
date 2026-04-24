@@ -1,12 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Camera, CameraResultType, CameraSource } from "@capacitor/camera";
 import { Geolocation } from "@capacitor/geolocation";
 import { cn } from "../lib/utils";
 import CameraPunchModal from "./CameraPunchModal";
 
-type Shift = "Matutino" | "Nocturno";
+type Shift = "Matutino" | "Nocturno" | "12x12" | "24x24" | "48x48";
 type PunchType = "IN" | "OUT";
-type JornadaType = "12x12" | "24x24" | "48x48";
 
 type MapRecord = {
   tipo: "IN" | "OUT";
@@ -17,20 +15,17 @@ type MapRecord = {
   servicio: string;
 };
 
-const SERVICIOS = [
-  "Notaria 190",
-  "Electro Motor Service",
-  "Tubos Tollocan",
-  "La Peninsular (Tramo Atarasquillo)",
-  "La Peninsular (Tramo Xona)",
-];
+type AssignedService = {
+  id: number;
+  nombre: string;
+  activo?: number;
+} | null;
 
-const JORNADAS: JornadaType[] = ["12x12", "24x24", "48x48"];
-
-const STORAGE_KEYS = {
-  servicio: "jlbs_timeclock_servicio",
-  jornada: "jlbs_timeclock_jornada",
-};
+type AssignedShift = {
+  id: number;
+  nombre: string;
+  activo?: number;
+} | null;
 
 function formatDateTime(value: any) {
   const d = value ? new Date(value) : null;
@@ -64,58 +59,9 @@ function formatOnlyTime(value: Date) {
   });
 }
 
-function computeToday(items: any[]) {
-  const sorted = [...items].sort((a, b) => {
-    const ta = new Date(a.hora || a.datetime || a.created_at).getTime();
-    const tb = new Date(b.hora || b.datetime || b.created_at).getTime();
-    return ta - tb;
-  });
 
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const dd = String(now.getDate()).padStart(2, "0");
-  const todayKey = `${yyyy}-${mm}-${dd}`;
-
-  const today = sorted.filter((it) => {
-    const dt = formatDateTime(it.hora || it.datetime || it.created_at);
-    return dt.dateKey === todayKey;
-  });
-
-  let openInTime: number | null = null;
-
-  for (const it of today) {
-    const tipo = String(it.tipo || "").toUpperCase();
-
-    if (tipo === "IN") {
-      openInTime = 1;
-    } else if (tipo === "OUT") {
-      if (openInTime != null) {
-        openInTime = null;
-      }
-    }
-  }
-
-  const forgotOut = openInTime != null;
-  return { forgotOut, todayCount: today.length };
-}
-
-function getSavedServicio(): string {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEYS.servicio) || "";
-    return SERVICIOS.includes(saved) ? saved : "";
-  } catch {
-    return "";
-  }
-}
-
-function getSavedJornada(): JornadaType | "" {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEYS.jornada) || "";
-    return JORNADAS.includes(saved as JornadaType) ? (saved as JornadaType) : "";
-  } catch {
-    return "";
-  }
+function itHasMap(it: any) {
+  return it?.lat != null && it?.lng != null;
 }
 
 export default function TimeClockSimple({
@@ -132,10 +78,16 @@ export default function TimeClockSimple({
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string>("");
   const [items, setItems] = useState<any[]>([]);
-  const [loadingList, setLoadingList] = useState(false);
+  const [, setLoadingList] = useState(false);
 
-  const [servicio, setServicio] = useState<string>(() => getSavedServicio());
-  const [jornada, setJornada] = useState<JornadaType | "">(() => getSavedJornada());
+  const [assignedService, setAssignedService] = useState<AssignedService>(null);
+  const [assignedShift, setAssignedShift] = useState<AssignedShift>(null);
+
+  const [loadingAssignedService, setLoadingAssignedService] = useState(false);
+  const [loadingAssignedShift, setLoadingAssignedShift] = useState(false);
+
+  const [assignedServiceError, setAssignedServiceError] = useState("");
+  const [assignedShiftError, setAssignedShiftError] = useState("");
 
   const [now, setNow] = useState(new Date());
 
@@ -151,7 +103,7 @@ export default function TimeClockSimple({
 
   const [pendingTipo, setPendingTipo] = useState<PunchType | null>(null);
   const [pendingServicio, setPendingServicio] = useState<string>("");
-  const [pendingJornada, setPendingJornada] = useState<JornadaType | "">("");
+  const [pendingTurno, setPendingTurno] = useState<string>("");
 
   const [currentLat, setCurrentLat] = useState<number | null>(null);
   const [currentLng, setCurrentLng] = useState<number | null>(null);
@@ -181,24 +133,9 @@ export default function TimeClockSimple({
   );
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setNow(new Date());
-    }, 1000);
-
+    const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
-
-  useEffect(() => {
-    try {
-      if (servicio) localStorage.setItem(STORAGE_KEYS.servicio, servicio);
-    } catch {}
-  }, [servicio]);
-
-  useEffect(() => {
-    try {
-      if (jornada) localStorage.setItem(STORAGE_KEYS.jornada, jornada);
-    } catch {}
-  }, [jornada]);
 
   const parseResponse = async (res: Response) => {
     const contentType = res.headers.get("content-type") || "";
@@ -209,9 +146,60 @@ export default function TimeClockSimple({
     return { _raw: text };
   };
 
+  const loadAssignedService = async () => {
+    setLoadingAssignedService(true);
+    setAssignedServiceError("");
+
+    try {
+      const res = await fetch(`${apiUrl}/api/timeclock/my-assigned-service`, {
+        method: "GET",
+        headers: authHeaders,
+      });
+
+      const data: any = await parseResponse(res);
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "No se pudo obtener el servicio asignado.");
+      }
+
+      setAssignedService(data.service || null);
+    } catch (e: any) {
+      setAssignedService(null);
+      setAssignedServiceError(e?.message || "No se pudo obtener el servicio asignado.");
+    } finally {
+      setLoadingAssignedService(false);
+    }
+  };
+
+  const loadAssignedShift = async () => {
+    setLoadingAssignedShift(true);
+    setAssignedShiftError("");
+
+    try {
+      const res = await fetch(`${apiUrl}/api/timeclock/my-assigned-shift`, {
+        method: "GET",
+        headers: authHeaders,
+      });
+
+      const data: any = await parseResponse(res);
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "No se pudo obtener el turno asignado.");
+      }
+
+      setAssignedShift(data.shift || null);
+    } catch (e: any) {
+      setAssignedShift(null);
+      setAssignedShiftError(e?.message || "No se pudo obtener el turno asignado.");
+    } finally {
+      setLoadingAssignedShift(false);
+    }
+  };
+
   const loadHistory = async () => {
     setLoadingList(true);
     setMsg("");
+
     try {
       const res = await fetch(`${apiUrl}/api/timeclock/history?limit=30`, {
         method: "GET",
@@ -228,7 +216,9 @@ export default function TimeClockSimple({
         throw new Error(detail || "No se pudo obtener historial");
       }
 
-      if (!data.success) throw new Error(data.error || "No se pudo obtener historial");
+      if (!data.success) {
+        throw new Error(data.error || "No se pudo obtener historial");
+      }
 
       setItems(data.items || []);
     } catch (e: any) {
@@ -239,6 +229,8 @@ export default function TimeClockSimple({
   };
 
   useEffect(() => {
+    loadAssignedService();
+    loadAssignedShift();
     loadHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -246,35 +238,55 @@ export default function TimeClockSimple({
   const lastItem = items.length ? items[0] : null;
   const lastType = lastItem ? (String(lastItem?.tipo || "").toUpperCase() as PunchType) : null;
 
-  const canIN = !loading && lastType !== "IN";
-  const canOUT = !loading && lastType === "IN";
+  const openEntryRecord = useMemo(() => {
+    if (!items.length) return null;
 
-  useEffect(() => {
-    if (lastType === "IN" && lastItem) {
-      const servicioAbierto = String(lastItem.lugar_trabajo || "").trim();
-      const jornadaAbierta = String(lastItem.jornada || "").trim() as JornadaType;
+    const sorted = [...items].sort((a, b) => {
+      const ta = new Date(a.hora || a.datetime || a.created_at).getTime();
+      const tb = new Date(b.hora || b.datetime || b.created_at).getTime();
+      return ta - tb;
+    });
 
-      if (SERVICIOS.includes(servicioAbierto)) setServicio(servicioAbierto);
-      if (JORNADAS.includes(jornadaAbierta)) setJornada(jornadaAbierta);
+    let currentOpen: any = null;
+
+    for (const it of sorted) {
+      const tipo = String(it.tipo || "").toUpperCase();
+      if (tipo === "IN") currentOpen = it;
+      else if (tipo === "OUT") currentOpen = null;
     }
-  }, [lastType, lastItem]);
 
-  const selectsLocked = canOUT;
+    return currentOpen;
+  }, [items]);
+
+  const resolvedAssignedShift = assignedShift?.nombre?.trim() || String(shift || "").trim();
+  const resolvedAssignedService = assignedService?.nombre?.trim() || "";
+
+  const canIN =
+    !loading &&
+    lastType !== "IN" &&
+    !!resolvedAssignedShift &&
+    !!resolvedAssignedService &&
+    !loadingAssignedService &&
+    !loadingAssignedShift;
+
+  const canOUT = !loading && lastType === "IN";
 
   const lastMovementData = useMemo(() => {
     if (!lastItem) return null;
 
     const dt = formatDateTime(lastItem.hora || lastItem.datetime || lastItem.created_at);
 
+    const lastTurnoRaw = String(lastItem.turno || "").trim();
+    const lastTurnoResolved = lastTurnoRaw || resolvedAssignedShift || "Sin turno";
+
     return {
       tipoTexto: String(lastItem.tipo || "").toUpperCase() === "IN" ? "Entrada" : "Salida",
       hora: dt.time,
       fecha: dt.date,
-      servicio: lastItem.lugar_trabajo || "Sin servicio",
-      jornada: lastItem.jornada || "Sin jornada",
-      turno: lastItem.turno || "Sin turno",
+      servicio: lastItem.lugar_trabajo || resolvedAssignedService || "Sin servicio",
+      turno: lastTurnoResolved,
     };
-  }, [lastItem]);
+  }, [lastItem, resolvedAssignedShift, resolvedAssignedService]);
 
   const requestNativeLocation = async () => {
     try {
@@ -306,53 +318,40 @@ export default function TimeClockSimple({
     }
   };
 
-  const checkNativeCameraPermission = async () => {
-    try {
-      const permissions = await Camera.requestPermissions();
-
-      const granted =
-        permissions.camera === "granted" || permissions.photos === "granted";
-
-      if (!granted) {
-        throw new Error("Debes permitir la cámara para continuar.");
-      }
-    } catch (err: any) {
-      throw new Error(err?.message || "No se pudo obtener permiso de cámara.");
-    }
-  };
-
   const openConfirmModal = async (tipo: PunchType) => {
     setMsg("");
 
-    let servicioToSend = servicio;
-    let jornadaToSend = jornada;
+    let servicioToSend = resolvedAssignedService;
+    let turnoToSend = resolvedAssignedShift;
 
-    if (tipo === "OUT" && lastType === "IN" && lastItem) {
-      servicioToSend = String(lastItem.lugar_trabajo || servicio || "");
-      jornadaToSend = (String(lastItem.jornada || jornada || "") as JornadaType) || "";
+    if (tipo === "OUT" && openEntryRecord) {
+      servicioToSend =
+        String(openEntryRecord.lugar_trabajo || "").trim() || resolvedAssignedService;
+
+      turnoToSend =
+        String(openEntryRecord.turno || "").trim() || resolvedAssignedShift;
     }
 
     if (!servicioToSend) {
-      setMsg("Selecciona un servicio.");
+      setMsg("No tienes un servicio asignado. Contacta al administrador.");
       return;
     }
 
-    if (!jornadaToSend) {
-      setMsg("Selecciona una jornada.");
+    if (!turnoToSend) {
+      setMsg("No tienes un turno asignado. Contacta al administrador.");
       return;
     }
 
     try {
-      await checkNativeCameraPermission();
       await requestNativeLocation();
     } catch (err: any) {
-      setMsg(err?.message || "Debes permitir cámara y ubicación para continuar.");
+      setMsg(err?.message || "Debes permitir ubicación para continuar.");
       return;
     }
 
     setPendingTipo(tipo);
     setPendingServicio(servicioToSend);
-    setPendingJornada(jornadaToSend);
+    setPendingTurno(turnoToSend);
     setShowConfirmModal(true);
   };
 
@@ -375,9 +374,6 @@ export default function TimeClockSimple({
     try {
       const formData = new FormData();
       formData.append("tipo", pendingTipo);
-      formData.append("turno", shift);
-      formData.append("lugar_trabajo", pendingServicio);
-      formData.append("jornada", pendingJornada);
       formData.append("foto", payload.blob, `fichaje-${pendingTipo}-${Date.now()}.jpg`);
 
       if (payload.lat != null) formData.append("lat", String(payload.lat));
@@ -401,9 +397,6 @@ export default function TimeClockSimple({
 
       if (!data.success) throw new Error(data.error || "No se pudo registrar");
 
-      setServicio(pendingServicio);
-      setJornada(pendingJornada);
-
       setMsg(pendingTipo === "IN" ? "✅ Entrada registrada" : "✅ Salida registrada");
 
       setSuccessTitle(pendingTipo === "IN" ? "Entrada registrada" : "Salida registrada");
@@ -412,11 +405,12 @@ export default function TimeClockSimple({
           ? `Tu entrada fue registrada correctamente a las ${formatOnlyTime(new Date())}.`
           : `Tu salida fue registrada correctamente a las ${formatOnlyTime(new Date())}.`
       );
+
       setShowSuccessModal(true);
 
       setPendingTipo(null);
       setPendingServicio("");
-      setPendingJornada("");
+      setPendingTurno("");
       setCurrentLat(null);
       setCurrentLng(null);
 
@@ -428,7 +422,6 @@ export default function TimeClockSimple({
     }
   };
 
-  const today = useMemo(() => computeToday(items), [items]);
   const statusLabel = lastType === "IN" ? "EN SERVICIO" : "FUERA DE TURNO";
 
   const buildOsmEmbedUrl = (lat: number, lng: number) => {
@@ -451,14 +444,21 @@ export default function TimeClockSimple({
     window.open(url, "_blank");
   };
 
+  const showSingleOpenEntryMessage = canOUT && !!openEntryRecord;
+  const showAssignedHint =
+    !showSingleOpenEntryMessage &&
+    !loadingAssignedService &&
+    !loadingAssignedShift &&
+    !!resolvedAssignedShift &&
+    !!resolvedAssignedService;
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col p-6 font-sans max-w-md mx-auto relative">
       <CameraPunchModal
         open={showCameraModal}
         tipo={pendingTipo}
         servicio={pendingServicio}
-        jornada={pendingJornada}
-        shift={shift}
+        shift={pendingTurno}
         initialLat={currentLat}
         initialLng={currentLng}
         onClose={() => setShowCameraModal(false)}
@@ -477,8 +477,7 @@ export default function TimeClockSimple({
             </h3>
 
             <p className="text-sm text-slate-600 text-center mt-2">
-              Después se abrirá la cámara para tomar una foto obligatoria donde se vea claramente
-              tu rostro.
+              Después se abrirá la cámara para tomar una foto obligatoria donde se vea claramente tu rostro.
             </p>
 
             <div className="mt-5 bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-3">
@@ -495,7 +494,7 @@ export default function TimeClockSimple({
                 <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
                   Turno
                 </div>
-                <div className="text-sm font-bold text-slate-900 mt-1">{shift}</div>
+                <div className="text-sm font-bold text-slate-900 mt-1">{pendingTurno}</div>
               </div>
 
               <div>
@@ -503,13 +502,6 @@ export default function TimeClockSimple({
                   Servicio
                 </div>
                 <div className="text-sm font-bold text-slate-900 mt-1">{pendingServicio}</div>
-              </div>
-
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                  Jornada
-                </div>
-                <div className="text-sm font-bold text-slate-900 mt-1">{pendingJornada}</div>
               </div>
 
               {currentLat != null && currentLng != null && (
@@ -554,8 +546,7 @@ export default function TimeClockSimple({
                 Ubicación del registro
               </h3>
               <p className="text-sm text-slate-600 text-center mt-2">
-                {selectedMapRecord.tipo === "IN" ? "Entrada" : "Salida"} •{" "}
-                {selectedMapRecord.fechaTexto} • {selectedMapRecord.horaTexto}
+                {selectedMapRecord.tipo === "IN" ? "Entrada" : "Salida"} • {selectedMapRecord.fechaTexto} • {selectedMapRecord.horaTexto}
               </p>
             </div>
 
@@ -637,7 +628,7 @@ export default function TimeClockSimple({
           <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Control horario</p>
           <h2 className="text-2xl font-extrabold text-slate-900">Fichaje</h2>
           <p className="text-xs text-slate-500 mt-1">
-            Turno: <span className="font-semibold text-slate-900">{shift}</span>
+            Turno: <span className="font-semibold text-slate-900">{resolvedAssignedShift || shift}</span>
           </p>
           <p className="text-xs text-[#0dcaf2] font-bold mt-2">Hora actual: {formatOnlyTime(now)}</p>
         </div>
@@ -652,12 +643,6 @@ export default function TimeClockSimple({
           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Estado</div>
           <div className="text-sm font-extrabold text-slate-900 mt-1">{statusLabel}</div>
         </div>
-
-        {today.forgotOut && (
-          <div className="mt-3 p-3 rounded-xl bg-amber-500/15 text-amber-800 text-xs font-bold">
-            ⚠️ Detecté una <span className="underline">Entrada sin Salida</span> hoy. Parece que olvidaste registrar salida.
-          </div>
-        )}
       </div>
 
       {lastMovementData && (
@@ -678,9 +663,24 @@ export default function TimeClockSimple({
               <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-slate-50 px-2 py-1 rounded-lg border border-slate-200">
                 {lastMovementData.servicio}
               </span>
-              <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-slate-50 px-2 py-1 rounded-lg border border-slate-200">
-                {lastMovementData.jornada}
-              </span>
+
+              {itHasMap(lastItem) && (
+                <button
+                  onClick={() =>
+                    openMapModal({
+                      tipo: String(lastItem?.tipo || "").toUpperCase() === "IN" ? "IN" : "OUT",
+                      lat: Number(lastItem.lat),
+                      lng: Number(lastItem.lng),
+                      fechaTexto: lastMovementData.fecha,
+                      horaTexto: lastMovementData.hora,
+                      servicio: lastMovementData.servicio,
+                    })
+                  }
+                  className="text-[10px] font-bold uppercase tracking-widest text-blue-700 bg-blue-50 px-2 py-1 rounded-lg border border-blue-200"
+                >
+                  Ver mapa
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -701,58 +701,44 @@ export default function TimeClockSimple({
         <div className="grid grid-cols-1 gap-4">
           <div>
             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
-              Servicio
+              Turno asignado
             </label>
-            <select
-              value={servicio}
-              onChange={(e) => setServicio(e.target.value)}
-              disabled={selectsLocked}
-              className={cn(
-                "w-full rounded-2xl border px-4 py-3 text-sm font-semibold outline-none",
-                selectsLocked
-                  ? "border-slate-200 bg-slate-100 text-slate-500 cursor-not-allowed"
-                  : "border-slate-200 bg-slate-50 text-slate-900"
-              )}
-            >
-              <option value="">Selecciona un servicio</option>
-              {SERVICIOS.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
+            <div className="w-full rounded-2xl border border-slate-200 bg-slate-50 text-slate-900 px-4 py-3 text-sm font-semibold">
+              {loadingAssignedShift ? "Cargando turno..." : resolvedAssignedShift || "Sin turno asignado"}
+            </div>
           </div>
 
           <div>
             <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
-              Jornada
+              Servicio asignado
             </label>
-            <select
-              value={jornada}
-              onChange={(e) => setJornada(e.target.value as JornadaType)}
-              disabled={selectsLocked}
-              className={cn(
-                "w-full rounded-2xl border px-4 py-3 text-sm font-semibold outline-none",
-                selectsLocked
-                  ? "border-slate-200 bg-slate-100 text-slate-500 cursor-not-allowed"
-                  : "border-slate-200 bg-slate-50 text-slate-900"
-              )}
-            >
-              <option value="">Selecciona una jornada</option>
-              {JORNADAS.map((j) => (
-                <option key={j} value={j}>
-                  {j}
-                </option>
-              ))}
-            </select>
+            <div className="w-full rounded-2xl border border-slate-200 bg-slate-50 text-slate-900 px-4 py-3 text-sm font-semibold">
+              {loadingAssignedService ? "Cargando servicio..." : resolvedAssignedService || "Sin servicio asignado"}
+            </div>
           </div>
-        </div>
 
-        {canOUT && (
-          <div className="mt-4 rounded-xl bg-blue-50 border border-blue-100 px-4 py-3 text-xs font-semibold text-blue-800">
-            La salida se registrará con el mismo servicio y jornada de la entrada actual.
-          </div>
-        )}
+          {showSingleOpenEntryMessage ? (
+            <div className="rounded-xl bg-amber-500/10 border border-amber-200 px-4 py-3 text-sm font-semibold text-amber-800">
+              Tienes una entrada abierta. La salida usará ese mismo turno y servicio automáticamente.
+            </div>
+          ) : showAssignedHint ? (
+            <div className="rounded-xl bg-slate-50 border border-slate-200 px-4 py-3 text-sm text-slate-600">
+              Los datos de turno y servicio son asignados por administración.
+            </div>
+          ) : null}
+
+          {!showSingleOpenEntryMessage && assignedShiftError && (
+            <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm font-semibold text-red-700">
+              {assignedShiftError}
+            </div>
+          )}
+
+          {!showSingleOpenEntryMessage && assignedServiceError && (
+            <div className="rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm font-semibold text-red-700">
+              {assignedServiceError}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 mb-6">
@@ -783,96 +769,6 @@ export default function TimeClockSimple({
         </button>
       </div>
 
-      <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100">
-        <div className="flex items-center justify-between mb-3">
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-            Historial
-          </div>
-
-          <button
-            onClick={loadHistory}
-            disabled={loadingList}
-            className="text-[10px] font-bold text-[#0dcaf2] uppercase tracking-widest"
-          >
-            {loadingList ? "Cargando..." : "Actualizar"}
-          </button>
-        </div>
-
-        {items.length === 0 ? (
-          <div className="text-sm text-slate-400 italic text-center py-6">Aún no hay fichajes.</div>
-        ) : (
-          <div className="space-y-3">
-            {items.slice(0, 12).map((it) => {
-              const isIn = String(it.tipo || "").toUpperCase() === "IN";
-              const dt = formatDateTime(it.hora || it.datetime || it.created_at);
-
-              return (
-                <div key={it.id} className="bg-slate-50 rounded-2xl px-4 py-4 border border-slate-100">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-start gap-3">
-                      <div
-                        className={cn(
-                          "w-10 h-10 rounded-xl flex items-center justify-center font-extrabold text-xs",
-                          isIn ? "bg-emerald-500/15 text-emerald-700" : "bg-slate-900/10 text-slate-900"
-                        )}
-                      >
-                        {isIn ? "IN" : "OUT"}
-                      </div>
-
-                      <div>
-                        <div className="text-sm font-extrabold text-slate-900">
-                          {isIn ? "Entrada" : "Salida"}
-                        </div>
-
-                        <div className="mt-1">
-                          <div className="text-xs text-slate-500">{dt.date}</div>
-                          <div className="text-xs font-semibold text-slate-700">{dt.time}</div>
-                        </div>
-
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-white px-2 py-1 rounded-lg border border-slate-200">
-                            {it.turno}
-                          </span>
-                          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-white px-2 py-1 rounded-lg border border-slate-200">
-                            {it.lugar_trabajo || "Sin servicio"}
-                          </span>
-                          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-white px-2 py-1 rounded-lg border border-slate-200">
-                            {it.jornada || "Sin jornada"}
-                          </span>
-
-                          {it.foto_url && (
-                            <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200">
-                              Con foto
-                            </span>
-                          )}
-
-                          {it.lat != null && it.lng != null && (
-                            <button
-                              onClick={() =>
-                                openMapModal({
-                                  tipo: isIn ? "IN" : "OUT",
-                                  lat: Number(it.lat),
-                                  lng: Number(it.lng),
-                                  fechaTexto: dt.date,
-                                  horaTexto: dt.time,
-                                  servicio: it.lugar_trabajo || "Sin servicio",
-                                })
-                              }
-                              className="text-[10px] font-bold uppercase tracking-widest text-blue-700 bg-blue-50 px-2 py-1 rounded-lg border border-blue-200"
-                            >
-                              Ver mapa
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
     </div>
   );
 }

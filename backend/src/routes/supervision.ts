@@ -29,10 +29,6 @@ const upload = multer({
   },
 });
 
-/**
- * Crear supervisión
- * Solo supervisor o admin
- */
 router.post(
   "/supervision/report",
   requireAuth,
@@ -48,7 +44,15 @@ router.post(
         return res.status(401).json({ success: false, error: "No autorizado" });
       }
 
-      const { servicio_id, turno, novedades, lat, lng, tipo } = req.body || {};
+      const {
+        servicio_id,
+        turno,
+        novedades,
+        lat,
+        lng,
+        tipo,
+        hay_incidencia,
+      } = req.body || {};
 
       if (!uploadedFile) {
         return res.status(400).json({
@@ -92,6 +96,19 @@ router.post(
         });
       }
 
+      const hayIncidenciaNorm =
+        Number(hay_incidencia) === 1 || String(hay_incidencia).trim() === "1" ? 1 : 0;
+
+      const novedadesNorm = novedades ? String(novedades).trim() : null;
+
+      if (hayIncidenciaNorm === 1 && !novedadesNorm) {
+        fs.unlink(uploadedFile.path, () => {});
+        return res.status(400).json({
+          success: false,
+          error: "Debes describir la incidencia en el campo de novedades.",
+        });
+      }
+
       const [serviceRows]: any = await pool.query(
         `SELECT id, nombre, activo
          FROM servicios
@@ -130,14 +147,13 @@ router.post(
       const lastMove = lastRows.length > 0 ? lastRows[0] : null;
       const lastTipo = lastMove ? String(lastMove.tipo || "").toUpperCase().trim() : null;
 
-      if (tipoNorm === "IN") {
-        if (lastTipo === "IN") {
-          fs.unlink(uploadedFile.path, () => {});
-          return res.status(409).json({
-            success: false,
-            error: "Ya tienes una entrada de supervisión abierta en este servicio. Primero registra la salida.",
-          });
-        }
+      if (tipoNorm === "IN" && lastTipo === "IN") {
+        fs.unlink(uploadedFile.path, () => {});
+        return res.status(409).json({
+          success: false,
+          error:
+            "Ya tienes una entrada de supervisión abierta en este servicio. Primero registra la salida.",
+        });
       }
 
       if (tipoNorm === "OUT") {
@@ -153,7 +169,8 @@ router.post(
           fs.unlink(uploadedFile.path, () => {});
           return res.status(409).json({
             success: false,
-            error: "Ya no hay una entrada abierta para este servicio. No puedes registrar otra salida.",
+            error:
+              "Ya no hay una entrada abierta para este servicio. No puedes registrar otra salida.",
           });
         }
       }
@@ -176,20 +193,22 @@ router.post(
           tipo,
           turno,
           novedades,
+          hay_incidencia,
           lat,
           lng,
           foto_url,
           fecha,
           hora
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           userId,
           servicio.id,
           servicio.nombre,
           tipoNorm,
           String(turno),
-          novedades ? String(novedades).trim() : null,
+          novedadesNorm,
+          hayIncidenciaNorm,
           latFinal,
           lngFinal,
           foto_url,
@@ -207,7 +226,8 @@ router.post(
           servicio_nombre: servicio.nombre,
           tipo: tipoNorm,
           turno: String(turno),
-          novedades: novedades ? String(novedades).trim() : null,
+          novedades: novedadesNorm,
+          hay_incidencia: hayIncidenciaNorm,
           lat: latFinal,
           lng: lngFinal,
           foto_url,
@@ -227,9 +247,6 @@ router.post(
   }
 );
 
-/**
- * Historial del supervisor logueado
- */
 router.get(
   "/supervision/history",
   requireAuth,
@@ -251,6 +268,7 @@ router.get(
           tipo,
           turno,
           novedades,
+          hay_incidencia,
           lat,
           lng,
           foto_url,
@@ -274,9 +292,6 @@ router.get(
   }
 );
 
-/**
- * Historial de fichajes de guardias para supervisor/admin
- */
 router.get(
   "/supervision/guards/history",
   requireAuth,
@@ -350,9 +365,6 @@ router.get(
   }
 );
 
-/**
- * Historial general para admin
- */
 router.get(
   "/admin/supervision/history",
   requireAuth,
@@ -369,6 +381,7 @@ router.get(
           s.tipo,
           s.turno,
           s.novedades,
+          s.hay_incidencia,
           s.lat,
           s.lng,
           s.foto_url,

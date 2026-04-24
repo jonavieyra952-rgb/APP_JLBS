@@ -16,6 +16,7 @@ import SupervisorCameraModal from "./SupervisorCameraModal";
 
 type Shift = "Matutino" | "Nocturno";
 type SupervisionType = "IN" | "OUT";
+type IncidentStatus = "0" | "1";
 
 type ServiceRow = {
   id: number;
@@ -80,6 +81,8 @@ export default function SupervisorReportSimple({
   const [selectedServiceId, setSelectedServiceId] = useState<string>("");
   const [entryNotes, setEntryNotes] = useState("");
   const [exitNotes, setExitNotes] = useState("");
+  const [entryIncidentStatus, setEntryIncidentStatus] = useState<IncidentStatus>("0");
+  const [exitIncidentStatus, setExitIncidentStatus] = useState<IncidentStatus>("0");
 
   const [currentLat, setCurrentLat] = useState<number | null>(null);
   const [currentLng, setCurrentLng] = useState<number | null>(null);
@@ -131,6 +134,8 @@ export default function SupervisorReportSimple({
   useEffect(() => {
     setEntryNotes("");
     setExitNotes("");
+    setEntryIncidentStatus("0");
+    setExitIncidentStatus("0");
     setMsg("");
   }, [selectedServiceId]);
 
@@ -190,7 +195,6 @@ export default function SupervisorReportSimple({
   useEffect(() => {
     loadServices();
     loadHistory();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const requestNativeLocation = async () => {
@@ -308,23 +312,43 @@ export default function SupervisorReportSimple({
     ? "bg-slate-100 border-slate-200 text-slate-600"
     : "bg-emerald-50 border-emerald-200 text-emerald-800";
 
+  const validateBeforeCamera = (tipo: SupervisionType) => {
+    if (tipo === "IN") {
+      if (!selectedServiceId) {
+        setMsg("Selecciona un servicio.");
+        return false;
+      }
+
+      if (!canRegisterIn) {
+        setMsg("Ya tienes una entrada abierta en un servicio. Primero registra la salida.");
+        return false;
+      }
+
+      if (entryIncidentStatus === "1" && !entryNotes.trim()) {
+        setMsg("Debes describir la incidencia de entrada.");
+        return false;
+      }
+    }
+
+    if (tipo === "OUT") {
+      if (!canRegisterOut) {
+        setMsg("No hay una entrada abierta para registrar la salida.");
+        return false;
+      }
+
+      if (exitIncidentStatus === "1" && !exitNotes.trim()) {
+        setMsg("Debes describir la incidencia de salida.");
+        return false;
+      }
+    }
+
+    return true;
+  };
+
   const openCamera = async (tipo: SupervisionType) => {
     setMsg("");
 
-    if (tipo === "IN" && !selectedServiceId) {
-      setMsg("Selecciona un servicio.");
-      return;
-    }
-
-    if (tipo === "IN" && !canRegisterIn) {
-      setMsg("Ya tienes una entrada abierta en un servicio. Primero registra la salida.");
-      return;
-    }
-
-    if (tipo === "OUT" && !canRegisterOut) {
-      setMsg("No hay una entrada abierta para registrar la salida.");
-      return;
-    }
+    if (!validateBeforeCamera(tipo)) return;
 
     try {
       await requestNativeLocation();
@@ -347,6 +371,7 @@ export default function SupervisorReportSimple({
     try {
       let serviceToUse = selectedService;
       let notesToUse = entryNotes.trim();
+      let incidentToUse: IncidentStatus = entryIncidentStatus;
 
       if (pendingTipo === "OUT") {
         if (!openEntryRecord) {
@@ -358,10 +383,15 @@ export default function SupervisorReportSimple({
           selectedService;
 
         notesToUse = exitNotes.trim();
+        incidentToUse = exitIncidentStatus;
       }
 
       if (!serviceToUse) {
         throw new Error("Servicio inválido.");
+      }
+
+      if (incidentToUse === "1" && !notesToUse) {
+        throw new Error("Debes describir la incidencia.");
       }
 
       const formData = new FormData();
@@ -369,6 +399,7 @@ export default function SupervisorReportSimple({
       formData.append("tipo", pendingTipo);
       formData.append("turno", shift);
       formData.append("novedades", notesToUse);
+      formData.append("hay_incidencia", incidentToUse);
       formData.append("foto", payload.blob, `supervision-${pendingTipo}-${Date.now()}.jpg`);
 
       if (payload.lat != null) formData.append("lat", String(payload.lat));
@@ -406,8 +437,10 @@ export default function SupervisorReportSimple({
 
       if (pendingTipo === "IN") {
         setEntryNotes("");
+        setEntryIncidentStatus("0");
       } else {
         setExitNotes("");
+        setExitIncidentStatus("0");
         setSelectedServiceId("");
       }
 
@@ -683,16 +716,40 @@ export default function SupervisorReportSimple({
 
             <div>
               <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                Estado de la supervisión
+              </label>
+              <select
+                value={entryIncidentStatus}
+                onChange={(e) => setEntryIncidentStatus(e.target.value as IncidentStatus)}
+                disabled={loading}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold outline-none"
+              >
+                <option value="0">Sin problema</option>
+                <option value="1">Con incidencia</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
                 Novedades de entrada
               </label>
               <textarea
                 value={entryNotes}
                 onChange={(e) => setEntryNotes(e.target.value)}
-                placeholder="Describe novedades, observaciones o condiciones encontradas al llegar..."
+                placeholder={
+                  entryIncidentStatus === "1"
+                    ? "Describe la incidencia encontrada..."
+                    : "Describe observaciones generales si lo deseas..."
+                }
                 rows={4}
                 disabled={loading}
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold outline-none resize-none"
               />
+              {entryIncidentStatus === "1" && (
+                <div className="mt-2 text-xs font-semibold text-red-600">
+                  Este campo es obligatorio si marcas "Con incidencia".
+                </div>
+              )}
             </div>
 
             {selectedService?.direccion && (
@@ -756,18 +813,44 @@ export default function SupervisorReportSimple({
             </div>
           </div>
 
-          <div>
-            <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
-              Novedades de salida
-            </label>
-            <textarea
-              value={exitNotes}
-              onChange={(e) => setExitNotes(e.target.value)}
-              placeholder="Describe novedades, observaciones o condiciones al retirarte..."
-              rows={4}
-              disabled={loading}
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold outline-none resize-none"
-            />
+          <div className="grid grid-cols-1 gap-4">
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                Estado de la supervisión
+              </label>
+              <select
+                value={exitIncidentStatus}
+                onChange={(e) => setExitIncidentStatus(e.target.value as IncidentStatus)}
+                disabled={loading}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold outline-none"
+              >
+                <option value="0">Sin problema</option>
+                <option value="1">Con incidencia</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">
+                Novedades de salida
+              </label>
+              <textarea
+                value={exitNotes}
+                onChange={(e) => setExitNotes(e.target.value)}
+                placeholder={
+                  exitIncidentStatus === "1"
+                    ? "Describe la incidencia detectada al finalizar..."
+                    : "Describe observaciones finales si lo deseas..."
+                }
+                rows={4}
+                disabled={loading}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold outline-none resize-none"
+              />
+              {exitIncidentStatus === "1" && (
+                <div className="mt-2 text-xs font-semibold text-red-600">
+                  Este campo es obligatorio si marcas "Con incidencia".
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="mt-4 rounded-2xl px-4 py-3 text-xs font-semibold border bg-amber-50 border-amber-200 text-amber-800">
@@ -882,11 +965,17 @@ export default function SupervisorReportSimple({
             {items.slice(0, 12).map((it) => {
               const dt = formatDateTime(it.hora || it.created_at);
               const isIn = String(it.tipo || "").toUpperCase() === "IN";
+              const hayIncidencia = Number(it.hay_incidencia) === 1;
 
               return (
                 <div
                   key={it.id}
-                  className="bg-slate-50 rounded-[1.5rem] px-4 py-4 border border-slate-100"
+                  className={cn(
+                    "rounded-[1.5rem] px-4 py-4 border",
+                    hayIncidencia
+                      ? "bg-red-50 border-red-100"
+                      : "bg-slate-50 border-slate-100"
+                  )}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
@@ -900,15 +989,28 @@ export default function SupervisorReportSimple({
                       </div>
                     </div>
 
-                    <div
-                      className={cn(
-                        "min-w-[78px] h-11 px-3 rounded-2xl flex items-center justify-center shrink-0 text-[11px] font-extrabold tracking-widest",
-                        isIn
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-slate-200 text-slate-700"
-                      )}
-                    >
-                      {isIn ? "ENTRADA" : "SALIDA"}
+                    <div className="flex flex-col gap-2 items-end">
+                      <div
+                        className={cn(
+                          "min-w-[78px] h-11 px-3 rounded-2xl flex items-center justify-center shrink-0 text-[11px] font-extrabold tracking-widest",
+                          isIn
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-slate-200 text-slate-700"
+                        )}
+                      >
+                        {isIn ? "ENTRADA" : "SALIDA"}
+                      </div>
+
+                      <div
+                        className={cn(
+                          "text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg border",
+                          hayIncidencia
+                            ? "text-red-700 bg-red-100 border-red-200"
+                            : "text-emerald-700 bg-emerald-100 border-emerald-200"
+                        )}
+                      >
+                        {hayIncidencia ? "Incidencia" : "Sin problema"}
+                      </div>
                     </div>
                   </div>
 
@@ -919,16 +1021,6 @@ export default function SupervisorReportSimple({
                     <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 bg-white px-2 py-1 rounded-lg border border-slate-200">
                       {it.servicio_nombre}
                     </span>
-                    <span
-                      className={cn(
-                        "text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded-lg border",
-                        isIn
-                          ? "text-emerald-700 bg-emerald-50 border-emerald-200"
-                          : "text-slate-700 bg-slate-100 border-slate-200"
-                      )}
-                    >
-                      {isIn ? "Entrada" : "Salida"}
-                    </span>
                     {it.foto_url && (
                       <span className="text-[10px] font-bold uppercase tracking-widest text-[#0dcaf2] bg-cyan-50 px-2 py-1 rounded-lg border border-cyan-200">
                         Con foto
@@ -937,7 +1029,14 @@ export default function SupervisorReportSimple({
                   </div>
 
                   {it.novedades && (
-                    <div className="mt-3 rounded-2xl bg-amber-50 border border-amber-100 p-3 text-xs text-amber-900">
+                    <div
+                      className={cn(
+                        "mt-3 rounded-2xl p-3 text-xs",
+                        hayIncidencia
+                          ? "bg-red-100 border border-red-200 text-red-900"
+                          : "bg-emerald-50 border border-emerald-200 text-emerald-900"
+                      )}
+                    >
                       <span className="font-bold">Novedades:</span> {it.novedades}
                     </div>
                   )}

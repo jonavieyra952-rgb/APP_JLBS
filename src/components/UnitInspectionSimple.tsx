@@ -1,10 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Camera, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Camera, ShieldCheck, TriangleAlert, X } from "lucide-react";
+import CameraPunchModal from "./CameraPunchModal";
 
 type Props = {
   token: string;
   apiBase: string;
   onBack?: () => void;
+};
+
+type EvidencePhoto = {
+  id: string;
+  blob: Blob;
+  previewUrl: string;
+  lat: number | null;
+  lng: number | null;
 };
 
 const TURNOS = ["Matutino", "Nocturno"];
@@ -22,6 +31,15 @@ const GASOLINA = ["Alto", "Medio", "Bajo"];
 const ACEITE = ["Correcto", "Bajo"];
 const FRENOS = ["Correcto", "Bajo"];
 const LLANTAS = ["Correctas", "Revisar"];
+const LUCES = ["Correctas", "Revisar"];
+const PARABRISAS = ["Correcto", "Revisar"];
+const ESPEJOS = ["Correctos", "Revisar"];
+const LIMPIEZA = ["Buena", "Regular", "Mala"];
+const NIVEL_AGUA = ["Correcto", "Bajo"];
+
+function makePhotoId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 export default function UnitInspectionSimple({
   token,
@@ -39,10 +57,15 @@ export default function UnitInspectionSimple({
   const [aceiteEstado, setAceiteEstado] = useState("Correcto");
   const [liquidoFrenosEstado, setLiquidoFrenosEstado] = useState("Correcto");
   const [llantasEstado, setLlantasEstado] = useState("Correctas");
+  const [lucesEstado, setLucesEstado] = useState("Correctas");
+  const [parabrisasEstado, setParabrisasEstado] = useState("Correcto");
+  const [espejosEstado, setEspejosEstado] = useState("Correctos");
+  const [limpiezaEstado, setLimpiezaEstado] = useState("Buena");
+  const [nivelAguaEstado, setNivelAguaEstado] = useState("Correcto");
 
   const [observaciones, setObservaciones] = useState("");
-  const [foto, setFoto] = useState<File | null>(null);
-  const [fotoPreview, setFotoPreview] = useState<string>("");
+  const [fotos, setFotos] = useState<EvidencePhoto[]>([]);
+  const [openCameraModal, setOpenCameraModal] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -62,7 +85,12 @@ export default function UnitInspectionSimple({
       gasolinaNivel === "Bajo" ||
       aceiteEstado === "Bajo" ||
       liquidoFrenosEstado === "Bajo" ||
-      llantasEstado === "Revisar"
+      llantasEstado === "Revisar" ||
+      lucesEstado === "Revisar" ||
+      parabrisasEstado === "Revisar" ||
+      espejosEstado === "Revisar" ||
+      limpiezaEstado === "Mala" ||
+      nivelAguaEstado === "Bajo"
     );
   }, [
     golpesEstado,
@@ -70,19 +98,12 @@ export default function UnitInspectionSimple({
     aceiteEstado,
     liquidoFrenosEstado,
     llantasEstado,
+    lucesEstado,
+    parabrisasEstado,
+    espejosEstado,
+    limpiezaEstado,
+    nivelAguaEstado,
   ]);
-
-  useEffect(() => {
-    if (!foto) {
-      setFotoPreview("");
-      return;
-    }
-
-    const objectUrl = URL.createObjectURL(foto);
-    setFotoPreview(objectUrl);
-
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [foto]);
 
   const parseResponse = async (res: Response) => {
     const contentType = res.headers.get("content-type") || "";
@@ -139,6 +160,41 @@ export default function UnitInspectionSimple({
     loadAssignedUnit();
   }, [apiBase, authHeaders]);
 
+  useEffect(() => {
+    return () => {
+      fotos.forEach((foto) => {
+        URL.revokeObjectURL(foto.previewUrl);
+      });
+    };
+  }, [fotos]);
+
+  function removeFoto(id: string) {
+    setFotos((prev) => {
+      const target = prev.find((foto) => foto.id === id);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((foto) => foto.id !== id);
+    });
+  }
+
+  function resetForm() {
+    setGolpesEstado("Sin novedad");
+    setGasolinaNivel("Medio");
+    setAceiteEstado("Correcto");
+    setLiquidoFrenosEstado("Correcto");
+    setLlantasEstado("Correctas");
+    setLucesEstado("Correctas");
+    setParabrisasEstado("Correcto");
+    setEspejosEstado("Correctos");
+    setLimpiezaEstado("Buena");
+    setNivelAguaEstado("Correcto");
+    setObservaciones("");
+
+    setFotos((prev) => {
+      prev.forEach((foto) => URL.revokeObjectURL(foto.previewUrl));
+      return [];
+    });
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setMessage("");
@@ -156,8 +212,8 @@ export default function UnitInspectionSimple({
       return;
     }
 
-    if (hayIncidencia && !foto) {
-      setError("Debes adjuntar una foto cuando exista una incidencia.");
+    if (hayIncidencia && fotos.length === 0) {
+      setError("Debes adjuntar al menos una foto cuando exista una incidencia.");
       return;
     }
 
@@ -172,11 +228,16 @@ export default function UnitInspectionSimple({
       formData.append("aceite_estado", aceiteEstado);
       formData.append("liquido_frenos_estado", liquidoFrenosEstado);
       formData.append("llantas_estado", llantasEstado);
+      formData.append("luces_estado", lucesEstado);
+      formData.append("parabrisas_estado", parabrisasEstado);
+      formData.append("espejos_estado", espejosEstado);
+      formData.append("limpieza_estado", limpiezaEstado);
+      formData.append("nivel_agua_estado", nivelAguaEstado);
       formData.append("observaciones", obs);
 
-      if (foto) {
-        formData.append("foto", foto);
-      }
+      fotos.forEach((foto, index) => {
+        formData.append("fotos", foto.blob, `inspeccion-${Date.now()}-${index + 1}.jpg`);
+      });
 
       const response = await fetch(`${apiBase}/api/unit-inspection`, {
         method: "POST",
@@ -199,14 +260,7 @@ export default function UnitInspectionSimple({
       }
 
       setMessage("Inspección registrada correctamente.");
-      setGolpesEstado("Sin novedad");
-      setGasolinaNivel("Medio");
-      setAceiteEstado("Correcto");
-      setLiquidoFrenosEstado("Correcto");
-      setLlantasEstado("Correctas");
-      setObservaciones("");
-      setFoto(null);
-      setFotoPreview("");
+      resetForm();
     } catch (err: any) {
       setError(err?.message || "Error al guardar inspección");
     } finally {
@@ -315,6 +369,11 @@ export default function UnitInspectionSimple({
             {renderSelect("Aceite", aceiteEstado, setAceiteEstado, ACEITE)}
             {renderSelect("Frenos", liquidoFrenosEstado, setLiquidoFrenosEstado, FRENOS)}
             {renderSelect("Llantas", llantasEstado, setLlantasEstado, LLANTAS)}
+            {renderSelect("Nivel de luces", lucesEstado, setLucesEstado, LUCES)}
+            {renderSelect("Parabrisas", parabrisasEstado, setParabrisasEstado, PARABRISAS)}
+            {renderSelect("Espejos", espejosEstado, setEspejosEstado, ESPEJOS)}
+            {renderSelect("Limpieza", limpiezaEstado, setLimpiezaEstado, LIMPIEZA)}
+            {renderSelect("Nivel de agua", nivelAguaEstado, setNivelAguaEstado, NIVEL_AGUA)}
           </div>
         </div>
 
@@ -327,7 +386,7 @@ export default function UnitInspectionSimple({
             value={observaciones}
             onChange={(e) => setObservaciones(e.target.value)}
             rows={5}
-            placeholder="Ejemplo: Unidad en buen estado general, golpe leve en defensa, gasolina baja."
+            placeholder="Ejemplo: Unidad en buen estado general, golpe leve en defensa, limpieza regular, nivel de agua bajo."
             className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 outline-none"
           />
         </div>
@@ -337,38 +396,65 @@ export default function UnitInspectionSimple({
             Evidencia fotográfica
           </div>
 
-          <label className="flex cursor-pointer items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-slate-600">
+          <button
+            type="button"
+            onClick={() => {
+              setError("");
+              setMessage("");
+              if (fotos.length >= 6) {
+                setError("Solo puedes agregar hasta 6 fotos.");
+                return;
+              }
+              setOpenCameraModal(true);
+            }}
+            className="w-full flex items-center justify-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-slate-700"
+          >
             <Camera className="h-4 w-4" />
             <span className="text-sm font-semibold">
-              {foto ? foto.name : "Seleccionar foto"}
+              {fotos.length > 0
+                ? `Agregar otra foto (${fotos.length}/6)`
+                : "Tomar foto o elegir de galería"}
             </span>
+          </button>
 
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0] || null;
-                setFoto(file);
-              }}
-            />
-          </label>
+          {fotos.length > 0 && (
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              {fotos.map((foto, index) => (
+                <div
+                  key={foto.id}
+                  className="relative rounded-2xl overflow-hidden border border-slate-200 bg-slate-50"
+                >
+                  <img
+                    src={foto.previewUrl}
+                    alt={`Vista previa ${index + 1}`}
+                    className="w-full h-40 object-cover"
+                  />
 
-          {fotoPreview && (
-            <div className="mt-4">
-              <img
-                src={fotoPreview}
-                alt="Vista previa"
-                className="w-full rounded-2xl border border-slate-200 object-cover max-h-72"
-              />
+                  <button
+                    type="button"
+                    onClick={() => removeFoto(foto.id)}
+                    className="absolute top-2 right-2 w-8 h-8 rounded-full bg-white/90 text-slate-700 flex items-center justify-center shadow"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+
+                  <div className="absolute left-2 bottom-2 rounded-lg bg-slate-900/75 text-white text-[10px] font-bold px-2 py-1">
+                    Foto {index + 1}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
+
+          <div className="mt-3 text-[11px] text-slate-500">
+            Puedes subir hasta 6 fotos. La cámara y la galería agregan el texto de evidencia sobre la imagen.
+          </div>
 
           {hayIncidencia && (
             <div className="mt-4 flex items-start gap-3 rounded-xl bg-amber-50 border border-amber-100 px-4 py-3 text-amber-700">
               <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
               <p className="text-xs font-medium leading-5">
-                Se detectó una incidencia. La foto es obligatoria para poder guardar la inspección.
+                Se detectó una incidencia. Debes adjuntar al menos una foto para poder guardar la inspección.
               </p>
             </div>
           )}
@@ -394,6 +480,40 @@ export default function UnitInspectionSimple({
           {loading ? "Guardando..." : "REGISTRAR INSPECCIÓN"}
         </button>
       </form>
+
+      <CameraPunchModal
+        open={openCameraModal}
+        title="Evidencia de inspección"
+        subtitle="La foto incluirá hora, ubicación, servicio, unidad y turno."
+        headerLabel="INSPECCIÓN"
+        servicio={servicio}
+        shift={turno}
+        unidad={unidad}
+        onClose={() => setOpenCameraModal(false)}
+        onConfirm={({ blob, lat, lng }) => {
+          if (fotos.length >= 6) {
+            setError("Solo puedes agregar hasta 6 fotos.");
+            setOpenCameraModal(false);
+            return;
+          }
+
+          const previewUrl = URL.createObjectURL(blob);
+
+          setFotos((prev) => [
+            ...prev,
+            {
+              id: makePhotoId(),
+              blob,
+              previewUrl,
+              lat,
+              lng,
+            },
+          ]);
+
+          setOpenCameraModal(false);
+          setError("");
+        }}
+      />
     </div>
   );
 }
